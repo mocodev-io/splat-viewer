@@ -1,0 +1,15 @@
+{
+  "name": "splat-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted browser viewer for 3D Gaussian splats with a camera emulator and post effects, built on the PlayCanvas engine.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "lil-gui": "0.21.0",
+    "playcanvas": "2.23.0"
+  }
+}

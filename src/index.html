@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <title>Splat Viewer</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "playcanvas": "./lib/playcanvas.mjs",
+                "lil-gui": "./lib/lil-gui.esm.min.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div id="hud">
+        <span id="fps">-- fps</span>
+        <span id="mode">fly</span>
+        <span id="status"></span>
+    </div>
+
+    <div id="help" hidden>
+        <h2>Controls</h2>
+        <dl>
+            <dt>Drag</dt><dd>look (fly) / orbit around pivot (orbit)</dd>
+            <dt>Right / shift drag</dt><dd>pan</dd>
+            <dt>W A S D</dt><dd>move</dd>
+            <dt>Q / E</dt><dd>down / up</dd>
+            <dt>Shift / Ctrl</dt><dd>fast / slow</dd>
+            <dt>Wheel</dt><dd>move speed (fly) / zoom (orbit)</dd>
+            <dt>Z / C</dt><dd>roll left / right</dd>
+            <dt>Click</dt><dd>focus on point (autofocus: click)</dd>
+            <dt>Double-click</dt><dd>set orbit pivot + focus there</dd>
+            <dt>O</dt><dd>toggle fly / orbit</dd>
+            <dt>V</dt><dd>toggle dolly zoom</dd>
+            <dt>R</dt><dd>reset camera</dd>
+            <dt>H</dt><dd>hide / show interface</dd>
+            <dt>?</dt><dd>this help</dd>
+        </dl>
+    </div>
+
+    <div id="empty-hint" hidden>No splats found. Put .ply / .sog files in the mounted <code>splats</code> folder.</div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
