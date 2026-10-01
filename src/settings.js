@@ -7,11 +7,13 @@ export const defaults = () => ({
         flip: true,             // most COLMAP-based trainers export y-down
         background: '#000000',
         renderScale: 1,         // internal resolution, 1 = native
+        metersPerUnit: 1,       // scene scale; COLMAP scenes have no real-world size
         antiAlias: false       // for splats trained with mip-splatting style AA
     },
     camera: {
         mode: 'fly',            // fly | orbit
-        fov: 60,
+        focalLength: 24,        // mm; field of view follows from this and the sensor
+        sensor: 'full frame',   // full frame | super 35 | aps-c | micro 4/3
         moveSpeed: 2,
         lookSpeed: 0.25,
         smoothing: 0.6,         // 0 = raw input, 1 = very floaty
@@ -32,10 +34,12 @@ export const defaults = () => ({
     lens: {
         autofocus: 'click',     // off | click | center
         focusSpeed: 4,          // focus pull speed, higher = faster
-        dof: false,
+        dof: 'off',             // off | lens (thin lens, own) | fast (engine)
         focusDistance: 3,
-        focusRange: 1,
-        blurRadius: 4,
+        fStop: 2.8,             // lens: f-number, lower = more blur
+        bokeh: 'round',         // lens: round | hexagon | octagon | anamorphic | swirl
+        focusRange: 1,          // fast: sharp zone around the focus distance
+        blurRadius: 4,          // fast: blur size
         nearBlur: true,
         distortion: 0,          // + barrel, - pincushion
         fringing: 0,
@@ -97,6 +101,7 @@ export const defaults = () => ({
     film: {
         grain: 0,
         grainSize: 1.5,
+        grainAnimated: true,    // off = a fixed grain pattern
         flicker: 0,
         gateWeave: 0,
         sharpen: 0,
@@ -125,7 +130,8 @@ export const defaults = () => ({
 export const presets = {
     'Clean': {},
     'Cinematic': {
-        lens: { dof: true, focusRange: 1.5, blurRadius: 5, anamorphic: 0.25, fringing: 2 },
+        camera: { focalLength: 50 },
+        lens: { dof: 'lens', fStop: 2, bokeh: 'anamorphic', anamorphic: 0.25, fringing: 2 },
         light: { bloom: 0.04, bloomThreshold: 0.7, halation: 0.15 },
         color: { lut: 'teal & orange', lutIntensity: 0.7, enhance: true, vibrance: 0.15, highlights: -0.2 },
         vignette: { intensity: 0.35 },
@@ -134,12 +140,12 @@ export const presets = {
         shake: { style: 'handheld', amount: 0.2 }
     },
     'Dream': {
-        lens: { dof: true, focusRange: 0.6, blurRadius: 7, fringing: 6 },
+        lens: { dof: 'lens', fStop: 1.2, bokeh: 'swirl', fringing: 6 },
         light: { exposure: 0.3, bloom: 0.12, bloomThreshold: 0.4, bloomBlur: 20, lightLeak: 0.5 },
         color: { grading: true, saturation: 0.85, contrast: 0.85, tint: '#ffe9f2', lut: 'faded film', lutIntensity: 0.6 },
         vignette: { intensity: 0.25, color: '#2a1030' },
         film: { grain: 0.04 },
-        camera: { drift: true }
+        camera: { focalLength: 50, drift: true }
     },
     'VHS': {
         lens: { fringing: 14, distortion: 0.08 },
@@ -157,7 +163,7 @@ export const presets = {
         stylize: { letterbox: '1.85' }
     },
     'Found footage': {
-        camera: { fov: 75 },
+        camera: { focalLength: 16 },
         lens: { distortion: 0.15, fringing: 8 },
         color: { grading: true, saturation: 0.7, contrast: 1.15, tint: '#e6ffe8' },
         vignette: { intensity: 0.4 },
@@ -197,7 +203,8 @@ export const presets = {
     },
     'Vertigo': {
         dolly: { enabled: true },
-        lens: { dof: true, focusRange: 0.8, blurRadius: 5 },
+        camera: { focalLength: 35 },
+        lens: { dof: 'lens', fStop: 2.8 },
         stylize: { letterbox: '1.85' }
     }
 };
@@ -220,7 +227,7 @@ export function mergeInto(dst, src) {
 }
 
 // How you steer is personal, not part of a look: presets leave these alone.
-const controlKeys = ['mode', 'moveSpeed', 'lookSpeed', 'smoothing', 'rollSpeed', 'driftSpeed'];
+const controlKeys = ['mode', 'sensor', 'moveSpeed', 'lookSpeed', 'smoothing', 'rollSpeed', 'driftSpeed'];
 
 // Builds the full settings for a preset, keeping the loaded splat, scene setup
 // and control feel intact.

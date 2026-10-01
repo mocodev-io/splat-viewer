@@ -14,6 +14,9 @@ const toneMappings = {
 };
 
 export const looks = ['none', 'duotone', 'thermal', 'night vision', 'halftone', 'ascii'];
+export const dofModes = ['off', 'lens', 'fast'];
+const dofModeIds = { off: 0, fast: 1, lens: 2 };   // must match sv_dofMode in compose.js
+export const bokehShapes = ['round', 'hexagon', 'octagon', 'anamorphic', 'swirl'];
 export const letterboxes = ['off', '1', '1.33', '1.85', '2', '2.39', '2.76'];
 
 // sRGB hex -> linear rgb array
@@ -29,6 +32,7 @@ function linearColor(hex, out = new pc.Color()) {
 export class Post {
     constructor(app, cameraEntity, sunEntity, settings, luts) {
         this.app = app;
+        this.camera = cameraEntity.camera;
         this.settings = settings;
         this.sun = sunEntity;
         this.luts = luts;
@@ -48,10 +52,11 @@ export class Post {
         const scope = app.graphicsDevice.scope;
         this.u = {};
         for (const name of [
-            'time', 'res', 'exposure', 'flicker', 'distortion', 'crt', 'gateWeave', 'glitch', 'pixelate',
+            'time', 'res', 'exposure', 'flicker', 'distortion', 'crt', 'gateWeave', 'glitch', 'pixelate', 'fringing',
             'motionBlur', 'reproject', 'camMotion', 'kuwahara', 'halation', 'anamorphic', 'anamorphicTint',
             'dirt', 'lightLeak', 'posterize', 'look', 'lookMix', 'cell', 'duoDark', 'duoLight', 'paper',
-            'outline', 'outlineColor', 'grain', 'grainSize', 'letterbox'
+            'outline', 'outlineColor', 'grain', 'grainSize', 'grainAnimated', 'letterbox',
+            'dofMode', 'depthMode', 'far', 'focus', 'aperture', 'dofMaxRadius', 'nearBlur', 'bokeh', 'dofSeed'
         ]) {
             this.u[name] = scope.resolve(`sv_${name}`);
         }
@@ -85,12 +90,20 @@ export class Post {
         app.scene.gsplat.antiAlias = s.scene.antiAlias;
 
         // ---- lens
-        f.dof.enabled = s.lens.dof;
+        // "lens" is our own thin-lens DoF in the compose shader. It still keeps
+        // the engine DoF switched on, at its cheapest, because that is what
+        // makes the engine render the scene depth texture we read.
+        const dofMode = s.lens.dof;
+        const fast = dofMode === 'fast';
+        f.dof.enabled = dofMode !== 'off';
         f.dof.focusDistance = rig.focus;
         f.dof.focusRange = s.lens.focusRange;
-        f.dof.blurRadius = s.lens.blurRadius;
-        f.dof.nearBlur = s.lens.nearBlur;
-        f.fringing.intensity = s.lens.fringing;
+        f.dof.blurRadius = fast ? s.lens.blurRadius : 1;
+        f.dof.nearBlur = fast && s.lens.nearBlur;
+        f.dof.highQuality = fast;
+        f.dof.blurRings = fast ? 4 : 1;
+        f.dof.blurRingPoints = fast ? 5 : 1;
+        f.fringing.intensity = 0;          // our own chromatic aberration replaces it
 
         // ---- light
         const bloomNeeded = s.light.bloom > 0 || s.light.halation > 0 || s.lens.anamorphic > 0 || s.lens.dirt > 0;
@@ -179,6 +192,31 @@ export class Post {
         u.outlineColor.setValue(linear(st.outlineColor));
         u.grain.setValue(s.film.grain);
         u.grainSize.setValue(Math.max(1, s.film.grainSize));
+        u.grainAnimated.setValue(s.film.grainAnimated ? 1 : 0);
+        u.fringing.setValue(s.lens.fringing / 2048);
         u.letterbox.setValue(st.letterbox === 'off' ? 0 : parseFloat(st.letterbox));
+
+        // Lens DoF. Thin lens: a point at infinity blurs into a circle of
+        // f² / (N · (S − f)) mm on the sensor (f focal length, N f-stop,
+        // S focus distance); nearer points scale that by (1 − S/D). The shader
+        // gets the infinity radius in scene-texture pixels.
+        const params = this.camera.shaderParams;
+        const depthMode = !params.sceneDepthMapLinear || params.sceneDepthMapPacked ? 0
+            : params.sceneDepthMapReciprocal ? 2 : 1;
+        const sceneWidth = device.width * s.scene.renderScale;
+        const sceneHeight = device.height * s.scene.renderScale;
+        const focal = rig.focalLength;
+        const focusMm = Math.max(rig.focus * s.scene.metersPerUnit * 1000, focal * 1.05);
+        const cocMm = (focal * focal) / (Math.max(s.lens.fStop, 0.5) * (focusMm - focal));
+        const aperture = (cocMm / 2) / rig.sensorWidth * sceneWidth;
+        u.dofMode.setValue(dofModeIds[dofMode] ?? 0);
+        u.depthMode.setValue(depthMode);
+        u.far.setValue(this.camera.farClip);
+        u.focus.setValue(rig.focus);
+        u.aperture.setValue(aperture);
+        u.dofMaxRadius.setValue(Math.min(aperture * (s.lens.nearBlur ? 1.5 : 1), 0.08 * sceneHeight));
+        u.nearBlur.setValue(s.lens.nearBlur ? 1 : 0);
+        u.bokeh.setValue(Math.max(0, bokehShapes.indexOf(s.lens.bokeh)));
+        u.dofSeed.setValue(s.film.taa ? (this.time * 997) % 1000 : 0);
     }
 }

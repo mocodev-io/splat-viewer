@@ -5,8 +5,9 @@
 // has them and adds the "sv_" stages around them:
 //
 //   screen warps (crt curve, lens distortion, gate weave, glitch, pixelate)
-//   -> scene sample (kuwahara, motion blur, glitch colour split)
-//   -> engine: sharpen, dof, ssao, fringing, bloom
+//   -> scene sample with chromatic aberration (kuwahara, lens DoF, motion blur,
+//      glitch colour split)
+//   -> engine: sharpen (in focus only), dof ("fast" mode only), ssao, bloom
 //   -> hdr extras (halation, anamorphic streaks, lens dirt, exposure, flicker, light leak)
 //   -> engine: colour enhance, grading, tonemap, LUT, vignette
 //   -> display stylize (posterize, looks, paper, outline)
@@ -35,9 +36,6 @@ export const composePS = /* glsl */ `
     #include "composeFringingPS"
     #include "composeCasPS"
     #include "composeColorLutPS"
-    #if DEBUG_COMPOSE == depth
-        #include "screenDepthPS"
-    #endif
     #include "composeDeclarationsPS"
 
     uniform float sv_time;
@@ -50,11 +48,24 @@ export const composePS = /* glsl */ `
     uniform float sv_gateWeave;
     uniform float sv_glitch;
     uniform float sv_pixelate;
+    uniform float sv_fringing;         // lateral chromatic aberration strength
 
     uniform float sv_motionBlur;
     uniform mat4 sv_reproject;
     uniform vec3 sv_camMotion;
     uniform float sv_kuwahara;
+
+    // depth of field: 0 off, 1 engine ("fast"), 2 thin lens
+    uniform int sv_dofMode;
+    uniform highp sampler2D uSceneDepthMap;
+    uniform int sv_depthMode;          // 0 unavailable, 1 linear, 2 reciprocal (splat scene depth)
+    uniform float sv_far;
+    uniform float sv_focus;            // focus distance, world units
+    uniform float sv_aperture;         // blur radius at infinity, scene pixels
+    uniform float sv_dofMaxRadius;     // largest blur radius, scene pixels
+    uniform float sv_nearBlur;         // 1 = blur in front of the focus plane too
+    uniform int sv_bokeh;              // 0 round, 1 hexagon, 2 octagon, 3 anamorphic, 4 swirl
+    uniform float sv_dofSeed;          // 0 = fixed pattern; changes per frame when TAA can average it
 
     uniform float sv_halation;
     uniform float sv_anamorphic;
@@ -74,6 +85,7 @@ export const composePS = /* glsl */ `
 
     uniform float sv_grain;
     uniform float sv_grainSize;
+    uniform float sv_grainAnimated;
     uniform float sv_letterbox;
 
     // ---------------------------------------------------------------- helpers
@@ -119,6 +131,21 @@ export const composePS = /* glsl */ `
     vec3 svSample(vec2 uv) {
         return texture2DLod(sceneTexture, uv, 0.0).rgb;
     }
+
+    // Lateral chromatic aberration: red lands a bit further out from the
+    // centre, blue a bit further in. Used for every sample the DoF and motion
+    // blur gather, so the colour fringes blur along with the image.
+    vec3 svSampleCA(vec2 uv) {
+        if (sv_fringing <= 0.0) return svSample(uv);
+        vec2 c = uv - 0.5;
+        vec2 ca = vec2(c.x * sv_res.x / sv_res.y, c.y);
+        vec2 off = c * dot(ca, ca) * sv_fringing;
+        return vec3(svSample(uv + off).r, svSample(uv).g, svSample(uv - off).b);
+    }
+
+    // how many pixels the lens DoF blurred the current pixel; keeps sharpening
+    // out of the blurred areas
+    float svDofBlur = 0.0;
 
     // Tonemapped sample, for effects that look at neighbouring cells after tonemapping.
     vec3 svDisplay(vec2 uv) {
@@ -221,21 +248,104 @@ export const composePS = /* glsl */ `
         return best / max(1.0 - best, vec3(0.001));
     }
 
+    // ------------------------------------------------------- lens DoF
+
+    float svDepth(vec2 uv) {
+        float v = texture2DLod(uSceneDepthMap, uv, 0.0).r;
+        if (sv_depthMode == 2) return v > 0.0 ? 1.0 / v : sv_far;
+        return v;
+    }
+
+    // Thin lens: the blur circle grows with |1/focus - 1/depth|. Behind the
+    // focus plane it levels off towards the aperture size, in front of it it
+    // grows fast, like a real lens.
+    float svCoc(float depth) {
+        float c = (1.0 - sv_focus / max(depth, 1e-4)) * sv_aperture;
+        if (c < 0.0) c *= sv_nearBlur;
+        return min(abs(c), sv_dofMaxRadius);
+    }
+
+    // Shapes the sample pattern: a disc becomes polygon, oval or swirl.
+    vec2 svBokehOffset(float angle, float radius, vec2 uv) {
+        vec2 dir = vec2(cos(angle), sin(angle));
+        if (sv_bokeh == 1 || sv_bokeh == 2) {
+            float blades = sv_bokeh == 1 ? 6.0 : 8.0;
+            float seg = 6.2831853 / blades;
+            float a = mod(angle + 0.3, seg) - seg * 0.5;
+            dir *= cos(seg * 0.5) / cos(a);
+        } else if (sv_bokeh == 3) {
+            dir.x *= 0.5;                                  // anamorphic: tall ovals
+        } else if (sv_bokeh == 4) {
+            // swirl (vintage Petzval / Helios): discs squash into cat's eyes
+            // towards the frame edge, lined up around the centre
+            vec2 c = (uv - 0.5) * vec2(sv_res.x / sv_res.y, 1.0);
+            float d = length(c);
+            if (d > 1e-3) {
+                vec2 radial = c / d;
+                vec2 tangent = vec2(-radial.y, radial.x);
+                float squash = 1.0 - clamp(d * 1.1, 0.0, 0.75);
+                dir = radial * dot(dir, radial) * squash + tangent * dot(dir, tangent);
+            }
+        }
+        return dir * radius;
+    }
+
+    // Single-pass scatter-as-gather on a golden-angle spiral: a sample counts
+    // when its own blur circle reaches this pixel, so blurred foreground spills
+    // over sharp background, while background behind a sharp object is held
+    // back (no halos).
+    vec3 svLensDof(vec2 uv, vec3 base) {
+        float centerDepth = svDepth(uv);
+        float centerSize = svCoc(centerDepth);
+        svDofBlur = centerSize;
+        float maxR = sv_dofMaxRadius;
+        vec3 color = base;
+        float total = 1.0;
+        // ~128 samples whatever the size; each pixel turns the spiral by its own
+        // angle, so small highlights read as discs instead of showing the
+        // sample pattern. Colour is read between texels (a free 2x2 average),
+        // which gives tiny highlights more chance to be picked up.
+        float radScale = max(maxR * maxR / 256.0, 0.2);
+        float radius = radScale;
+        float angle = svHash(gl_FragCoord.xy + sv_dofSeed) * 6.2831853;
+        vec2 between = 0.5 * sceneTextureInvRes;
+        for (int i = 0; i < 260; i++) {
+            if (radius >= maxR) break;
+            vec2 tc = uv + svBokehOffset(angle, radius, uv) * sceneTextureInvRes;
+            vec3 sampleColor = svSampleCA(tc + between);
+            float sampleDepth = svDepth(tc);
+            float sampleSize = svCoc(sampleDepth);
+            if (sampleDepth > centerDepth) sampleSize = min(sampleSize, centerSize * 2.0);
+            float m = smoothstep(radius - 0.5, radius + 0.5, sampleSize);
+            color += mix(color / total, sampleColor, m);
+            total += 1.0;
+            angle += 2.39996323;
+            radius += radScale / radius;
+        }
+        return color / total;
+    }
+
     vec3 svScene(vec2 uv, vec3 base) {
         vec3 col = base;
 
         if (sv_kuwahara > 0.0) {
             col = svKuwahara(uv, sv_kuwahara);
-        } else if (sv_motionBlur > 0.0) {
-            vec2 v = svVelocity(uv);
-            if (dot(v, v) > 1e-9) {
-                col = vec3(0.0);
-                float jitter = svHash(gl_FragCoord.xy + fract(sv_time) * 61.0) - 0.5;
-                for (int i = 0; i < 12; i++) {
-                    float t = (float(i) + 0.5 + jitter) / 12.0 - 0.5;
-                    col += svSample(uv - v * t);
+        } else {
+            if (sv_dofMode == 2 && sv_depthMode > 0 && sv_dofMaxRadius > 0.5) {
+                col = svLensDof(uv, base);
+            }
+            if (sv_motionBlur > 0.0) {
+                vec2 v = svVelocity(uv);
+                if (dot(v, v) > 1e-9) {
+                    vec3 blurred = vec3(0.0);
+                    float jitter = svHash(gl_FragCoord.xy + fract(sv_time) * 61.0) - 0.5;
+                    for (int i = 0; i < 12; i++) {
+                        float t = (float(i) + 0.5 + jitter) / 12.0 - 0.5;
+                        blurred += svSampleCA(uv - v * t);
+                    }
+                    // add the streaks on top of whatever DoF made of this pixel
+                    col = max(col + blurred / 12.0 - base, vec3(0.0));
                 }
-                col /= 12.0;
             }
         }
 
@@ -350,18 +460,17 @@ export const composePS = /* glsl */ `
         float outside;
         vec2 uv = svWarp(baseUv, outside);
         vec4 scene = texture2DLod(sceneTexture, uv, 0.0);
-        vec3 result = svScene(uv, scene.rgb);
+        vec3 result = svScene(uv, svSampleCA(uv));
         #ifdef CAS
-            result = applyCas(result, uv, sharpness);
+            // the engine's sharpen reads the unblurred scene, so it would put
+            // detail back into what the DoF just softened
+            result = mix(applyCas(result, uv, sharpness), result, clamp(svDofBlur / 1.5, 0.0, 1.0));
         #endif
         #ifdef DOF
-            result = applyDof(result, uv);
+            if (sv_dofMode == 1) result = applyDof(result, uv);
         #endif
         #ifdef SSAO_TEXTURE
             result = applySsao(result, uv);
-        #endif
-        #ifdef FRINGING
-            result = applyFringing(result, uv);
         #endif
         #ifdef BLOOM
             result = applyBloom(result, uv);
@@ -447,11 +556,6 @@ export const composePS = /* glsl */ `
                 result = vec3(dSsao);
             #elif defined(VIGNETTE) && DEBUG_COMPOSE == vignette
                 result = vec3(dVignette);
-            #elif DEBUG_COMPOSE == depth
-                float dDepth = getLinearScreenDepth(uv);
-                result = vec3(clamp((dDepth - camera_params.z) / (camera_params.y - camera_params.z), 0.0, 1.0));
-            #elif DEBUG_COMPOSE == depthmissing
-                result = vec3(0.0);
             #endif
         #endif
         result = gammaCorrectOutput(result);
@@ -460,7 +564,7 @@ export const composePS = /* glsl */ `
 
         if (sv_grain > 0.0) {
             vec2 gp = floor(gl_FragCoord.xy / sv_grainSize);
-            vec2 seed = vec2(fract(sv_time * 7.31) * 113.0, fract(sv_time * 3.17) * 71.0);
+            vec2 seed = vec2(fract(sv_time * 7.31) * 113.0, fract(sv_time * 3.17) * 71.0) * sv_grainAnimated;
             float n = (svHash(gp + seed) + svHash(gp + seed + 19.19) + svHash(gp - seed + 7.7)) / 3.0 - 0.5;
             float lum = svLuma(result);
             float weight = 1.0 - 0.6 * lum * lum;

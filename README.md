@@ -13,8 +13,8 @@ serves static files.
 ```sh
 docker run -d --name splat-viewer \
   -p 8096:80 \
-  -v /path/to/splats:/usr/share/nginx/html/splats:ro \
-  -v /path/to/luts:/usr/share/nginx/html/luts:ro \
+  -v /path/to/splats:/splats:ro \
+  -v /path/to/luts:/luts:ro \
   ghcr.io/mocodev-io/splat-viewer:latest
 ```
 
@@ -29,8 +29,8 @@ services:
     ports:
       - "8096:80"
     volumes:
-      - /path/to/splats:/usr/share/nginx/html/splats:ro
-      - /path/to/luts:/usr/share/nginx/html/luts:ro
+      - /path/to/splats:/splats:ro
+      - /path/to/luts:/luts:ro
     restart: unless-stopped
 ```
 
@@ -78,13 +78,22 @@ Touch works too: one finger looks or orbits, two fingers pinch and pan.
 
 ## What's in the panel
 
-- **Camera:** field of view, dolly zoom (vertigo), roll, true fisheye
-  projection of the splats, move/look speed, smoothing, auto-orbit drift.
+- **Camera:** focal length in mm on a chosen sensor (full frame, Super 35,
+  APS-C, Micro 4/3), dolly zoom (vertigo), roll, true fisheye projection of
+  the splats, move/look speed, smoothing, auto-orbit drift.
 - **Camera shake:** handheld, walk, run, vehicle and earthquake, with amount
   and speed.
 - **Lens:** autofocus (click or continuous centre) with focus pull speed,
-  depth of field with bokeh size and foreground blur, barrel/pincushion
-  distortion, chromatic aberration, anamorphic streaks, lens dirt.
+  barrel/pincushion distortion, chromatic aberration, anamorphic streaks,
+  lens dirt. Two depth of field models:
+  - *lens*: thin-lens blur on full resolution, computed from focal length,
+    f-stop, focus distance and sensor. Blurred foreground spills over sharp
+    background, highlights turn into bokeh, chromatic aberration blurs along.
+    Bokeh shape: round, hexagon, octagon, anamorphic, swirl. Set
+    **Scene → Meters per unit** once per scene, so the lens maths knows how
+    big the scene is.
+  - *fast*: the engine's half-resolution DoF with a sharp focus range.
+    Cheaper, but with harder edges.
 - **Light:** exposure, tone mapping (ACES, ACES2, Filmic, Hejl, Neutral,
   Linear), bloom, halation, light leaks, ambient occlusion.
 - **Fog & sun:** volumetric height fog, with optional light shafts through
@@ -92,7 +101,8 @@ Touch works too: one finger looks or orbits, two fingers pinch and pan.
 - **Colour:** LUT looks, brightness/contrast/saturation/tint,
   shadows/midtones/highlights, vibrance, dehaze.
 - **Vignette:** intensity, shape, colour.
-- **Film:** grain, flicker, gate weave, sharpen, temporal AA.
+- **Film:** grain (animated or fixed), flicker, gate weave, sharpen,
+  temporal AA.
 - **Stylize:** motion blur (shutter-based, independent of framerate),
   letterbox aspect ratios, looks (duotone, thermal, night vision, halftone,
   ascii), pixelate, posterize, oil paint, outlines, paper, glitch, CRT.
@@ -131,8 +141,9 @@ npm run build                  # writes dist/
 docker build -t splat-viewer .
 ```
 
-`dist/` needs nginx (see `nginx.conf`). The splat and LUT pickers read the
-folder listing as JSON (`autoindex_format json`).
+`dist/` needs nginx (see `nginx.conf`), which also serves `/splats` and
+`/luts` from outside the site. The splat and LUT pickers read the folder
+listing as JSON (`autoindex_format json`).
 
 ### Updating PlayCanvas
 

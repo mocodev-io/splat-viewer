@@ -3,7 +3,8 @@
 
 import GUI from 'lil-gui';
 import { presets, presetSettings, mergeInto } from './settings.js';
-import { looks, letterboxes } from './post.js';
+import { looks, letterboxes, dofModes, bokehShapes } from './post.js';
+import { sensors } from './camera.js';
 
 export class Panel {
     constructor(settings, { splats, luts, onSplat, onResetCamera }) {
@@ -29,7 +30,8 @@ export class Panel {
         // ---- camera
         const cam = gui.addFolder('Camera');
         cam.add(s.camera, 'mode', ['fly', 'orbit']).name('Mode (O)');
-        cam.add(s.camera, 'fov', 5, 150, 1).name('Field of view');
+        cam.add(s.camera, 'focalLength', 8, 300, 1).name('Focal length (mm)');
+        cam.add(s.camera, 'sensor', Object.keys(sensors)).name('Sensor');
         cam.add(s.dolly, 'enabled').name('Dolly zoom (V)');
         cam.add(s.camera, 'roll', -180, 180, 0.1).name('Roll (Z / C)');
         cam.add(s.camera, 'fisheye', 0, 1, 0.01).name('Fisheye projection');
@@ -50,10 +52,18 @@ export class Panel {
         const lens = gui.addFolder('Lens');
         lens.add(s.lens, 'autofocus', ['off', 'click', 'center']).name('Autofocus');
         lens.add(s.lens, 'focusSpeed', 0.5, 20, 0.1).name('Focus pull speed');
-        lens.add(s.lens, 'dof').name('Depth of field');
+        lens.add(s.lens, 'dof', dofModes).name('Depth of field').onChange(() => this.updateDofControls());
         lens.add(s.lens, 'focusDistance', 0.05, 100, 0.01).name('Focus distance');
-        lens.add(s.lens, 'focusRange', 0.01, 20, 0.01).name('Focus range');
-        lens.add(s.lens, 'blurRadius', 1, 12, 0.1).name('Bokeh size');
+        this.dofControls = {
+            lens: [
+                lens.add(s.lens, 'fStop', 0.95, 22, 0.05).name('f-stop'),
+                lens.add(s.lens, 'bokeh', bokehShapes).name('Bokeh shape')
+            ],
+            fast: [
+                lens.add(s.lens, 'focusRange', 0.01, 20, 0.01).name('Focus range'),
+                lens.add(s.lens, 'blurRadius', 1, 12, 0.1).name('Blur size')
+            ]
+        };
         lens.add(s.lens, 'nearBlur').name('Blur foreground');
         lens.add(s.lens, 'distortion', -0.3, 0.5, 0.005).name('Distortion (+barrel)');
         lens.add(s.lens, 'fringing', 0, 40, 0.1).name('Chromatic aberration');
@@ -121,6 +131,7 @@ export class Panel {
         const film = gui.addFolder('Film');
         film.add(s.film, 'grain', 0, 0.5, 0.001).name('Grain');
         film.add(s.film, 'grainSize', 1, 6, 0.1).name('Grain size');
+        film.add(s.film, 'grainAnimated').name('Animated grain');
         film.add(s.film, 'flicker', 0, 1, 0.01).name('Flicker');
         film.add(s.film, 'gateWeave', 0, 2, 0.01).name('Gate weave');
         film.add(s.film, 'sharpen', 0, 1, 0.01).name('Sharpen');
@@ -150,12 +161,22 @@ export class Panel {
         const scene = gui.addFolder('Scene');
         scene.add(s.scene, 'flip').name('Flip upside down');
         scene.addColor(s.scene, 'background').name('Background');
+        scene.add(s.scene, 'metersPerUnit', 0.01, 10, 0.01).name('Meters per unit');
         scene.add(s.scene, 'renderScale', 0.25, 1, 0.05).name('Render scale');
         scene.add(s.scene, 'antiAlias').name('Splat anti-aliasing');
         scene.close();
 
+        this.updateDofControls();
+
         this.fileInput = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' });
         this.fileInput.addEventListener('change', () => this.readImport());
+    }
+
+    // only show the sliders that belong to the chosen DoF model
+    updateDofControls() {
+        const mode = this.settings.lens.dof;
+        for (const c of this.dofControls.lens) c.show(mode === 'lens');
+        for (const c of this.dofControls.fast) c.show(mode === 'fast');
     }
 
     setSplats(list) {
@@ -171,6 +192,7 @@ export class Panel {
         requestAnimationFrame(() => {
             this.refreshQueued = false;
             for (const c of this.gui.controllersRecursive()) c.updateDisplay();
+            this.updateDofControls();
         });
     }
 

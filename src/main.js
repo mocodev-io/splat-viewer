@@ -38,7 +38,6 @@ window.addEventListener('resize', () => app.resizeCanvas());
 const camera = new pc.Entity('camera');
 camera.addComponent('camera', {
     clearColor: new pc.Color(0, 0, 0),
-    fov: settings.camera.fov,
     nearClip: 0.02,
     farClip: 2000
 });
@@ -173,7 +172,8 @@ app.on('update', dt => {
     fpsTime += dt;
     if (fpsTime >= 0.5) {
         $('fps').textContent = `${Math.round(fpsFrames / fpsTime)} fps`;
-        $('mode').textContent = settings.dolly.enabled ? `${settings.camera.mode} · dolly` : settings.camera.mode;
+        const lens = `${Math.round(rig.focalLength)}mm` + (settings.lens.dof === 'lens' ? ` f/${settings.lens.fStop}` : '');
+        $('mode').textContent = [settings.camera.mode, lens, settings.dolly.enabled ? 'dolly' : ''].filter(Boolean).join(' · ');
         fpsFrames = 0;
         fpsTime = 0;
     }

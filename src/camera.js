@@ -2,12 +2,20 @@
 // dolly zoom, autofocus by picking the splat, and the per-frame motion data
 // the compose shader uses for motion blur.
 //
-// The pose is a plain {position, yaw, pitch, roll, fov, focus} so a keyframed
-// camera path can drive the same rig later.
+// The pose is a plain {position, yaw, pitch, roll, focal length, focus} so a
+// keyframed camera path can drive the same rig later.
 
 import * as pc from 'playcanvas';
 
 const DEG = Math.PI / 180;
+
+// sensor widths in mm; the field of view follows from focal length + sensor
+export const sensors = {
+    'full frame': 36,
+    'super 35': 24.89,
+    'aps-c': 23.5,
+    'micro 4/3': 17.3
+};
 const tmpV = new pc.Vec3();
 const tmpV2 = new pc.Vec3();
 const tmpM = new pc.Mat4();
@@ -64,7 +72,8 @@ export class CameraRig {
         this.home = { pivot: new pc.Vec3(), distance: 5, yaw: 0, pitch: -10 };
 
         this.focus = settings.lens.focusDistance;   // smoothed focus distance
-        this.fov = settings.camera.fov;
+        this.focalLength = settings.camera.focalLength;   // effective, dolly zoom moves it
+        this.fov = 60;                                    // vertical, derived from the lens
         this.time = 0;
 
         this.keys = new Set();
@@ -72,7 +81,7 @@ export class CameraRig {
         this.pinchDistance = 0;
         this.clickStart = null;
 
-        this.dolly = null;              // { subject, d0, fov0 } while dolly zoom is active
+        this.dolly = null;              // { subject, d0, focal0 } while dolly zoom is active
         this.lastMode = settings.camera.mode;
 
         // motion blur
@@ -406,16 +415,24 @@ export class CameraRig {
         this.entity.rotateLocal(0, 0, cam.roll);
         this.applyShake();
 
-        // The rig thinks in vertical FOV; the camera gets the horizontal one,
-        // because the engine's fisheye projection sizes itself on camera.fov
-        // and clips the wider axis when that is the vertical angle.
+        // Focal length + sensor width give the horizontal field of view, like a
+        // real camera filling the frame width. The camera gets it horizontally
+        // (the engine's fisheye projection sizes itself on camera.fov and clips
+        // the wider axis otherwise); the rig keeps the vertical angle too.
         const aspect = this.camera.aspectRatio || 16 / 9;
-        const hfov = 2 * Math.atan(Math.tan(this.fov * DEG / 2) * aspect) / DEG;
+        const hfov = 2 * Math.atan(this.sensorWidth / (2 * this.focalLength)) / DEG;
+        this.fov = 2 * Math.atan(Math.tan(hfov * DEG / 2) / aspect) / DEG;
         this.camera.horizontalFov = true;
         this.camera.fov = Math.min(hfov, 175);
         this.updateMotion(dt);
     }
 
+    get sensorWidth() {
+        return sensors[this.settings.camera.sensor] ?? sensors['full frame'];
+    }
+
+    // Dolly zoom: the subject keeps its size when the focal length scales with
+    // the distance to it.
     updateDolly() {
         const s = this.settings;
         if (s.dolly.enabled && !this.dolly) {
@@ -424,23 +441,22 @@ export class CameraRig {
             this.dolly = {
                 subject: this.current.position.clone().add(fwd.mulScalar(d0)),
                 d0,
-                fov0: s.camera.fov
+                focal0: s.camera.focalLength
             };
             this.events.onStatus('dolly zoom: move forward / back');
         } else if (!s.dolly.enabled && this.dolly) {
-            s.camera.fov = Math.round(this.fov);
+            s.camera.focalLength = Math.round(this.focalLength);
             this.dolly = null;
             this.events.onSettingsChanged();
         }
 
         if (this.dolly) {
-            const { subject, d0, fov0 } = this.dolly;
+            const { subject, d0, focal0 } = this.dolly;
             const d = Math.max(this.current.position.distance(subject), 0.01);
-            const half = Math.atan(Math.tan(fov0 * DEG / 2) * d0 / d) / DEG;
-            this.fov = pc.math.clamp(half * 2, 3, 150);
+            this.focalLength = pc.math.clamp(focal0 * d / d0, 4, 600);
             s.lens.focusDistance = d;
         } else {
-            this.fov = s.camera.fov;
+            this.focalLength = s.camera.focalLength;
         }
     }
 
