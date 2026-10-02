@@ -3,6 +3,7 @@ import { defaults } from './settings.js';
 import { CameraRig } from './camera.js';
 import { Post } from './post.js';
 import { Performance } from './perf.js';
+import { MeasureTool } from './measure.js';
 import { LutLibrary, listFolder } from './luts.js';
 import { Panel } from './ui.js';
 
@@ -78,7 +79,8 @@ const events = {
 const rig = new CameraRig(app, camera, settings, events);
 const perf = new Performance(app, settings, events);
 const luts = new LutLibrary(device);
-const post = new Post(app, camera, sun, settings, luts);
+const post = new Post(app, camera, sun, settings, luts, events);
+const measure = new MeasureTool(rig, camera, settings, events);
 
 // ------------------------------------------------------------------ splats
 
@@ -177,8 +179,12 @@ function applySceneSettings() {
 window.addEventListener('keydown', e => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
     if (e.code === 'KeyH') document.body.classList.toggle('ui-hidden');
+    if (e.code === 'KeyM') measure.toggle();
     if (e.key === '?') $('help').hidden = !$('help').hidden;
-    if (e.code === 'Escape') $('help').hidden = true;
+    if (e.code === 'Escape') {
+        $('help').hidden = true;
+        measure.stop();
+    }
 });
 
 // ------------------------------------------------------------------ frame loop
@@ -190,13 +196,14 @@ app.on('update', dt => {
     rig.pickScale = perf.level.pickScale;
     rig.update(dt);
     post.update(dt, rig, perf.level);
+    measure.update();
 
     hudTime += dt;
     if (hudTime >= 0.5) {
         hudTime = 0;
         const p = settings.performance;
         $('fps').textContent = `${Math.round(perf.fps)} fps · ${p.quality} · ${Math.round(p.scale * 100)}%`;
-        const lens = `${Math.round(rig.focalLength)}mm` + (settings.lens.dof === 'lens' ? ` f/${settings.lens.fStop}` : '');
+        const lens = `${Math.round(rig.focalLength)}mm` + (settings.lens.dof ? ` f/${settings.lens.fStop}` : '');
         $('mode').textContent = [settings.camera.mode, lens, settings.dolly.enabled ? 'dolly' : ''].filter(Boolean).join(' · ');
     }
 });
@@ -213,7 +220,8 @@ panel = new Panel(settings, {
     luts: luts.names(),
     onLoad: () => loadSplat(settings.scene.splat),
     onUnload: unloadSplat,
-    onResetCamera: () => rig.resetToHome()
+    onResetCamera: () => rig.resetToHome(),
+    measure
 });
 
 hint(splats.length
@@ -221,4 +229,4 @@ hint(splats.length
     : 'No splats found. Put .ply / .sog files in the mounted splats folder.');
 
 // handy from the browser console
-window.viewer = { app, settings, rig, post, perf, loadSplat, unloadSplat };
+window.viewer = { app, settings, rig, post, perf, measure, loadSplat, unloadSplat };

@@ -40,13 +40,10 @@ export const defaults = () => ({
     lens: {
         autofocus: 'click',     // off | click | center
         focusSpeed: 4,          // focus pull speed, higher = faster
-        dof: 'off',             // off | lens (thin lens, own) | fast (engine)
-        focusDistance: 3,
-        fStop: 2.8,             // lens: f-number, lower = more blur
-        bokeh: 'round',         // lens: round | hexagon | octagon | anamorphic | swirl
-        focusRange: 1,          // fast: sharp zone around the focus distance
-        blurRadius: 4,          // fast: blur size
-        nearBlur: true,
+        dof: false,             // thin-lens depth of field
+        focusDistance: 3,       // scene units, along the view axis
+        fStop: 2.8,             // f-number, lower = more blur
+        bokeh: 'round',         // round | hexagon | octagon | anamorphic | swirl
         distortion: 0,          // + barrel, - pincushion
         fringing: 0,
         anamorphic: 0,          // horizontal streaks from bright areas (needs bloom)
@@ -137,7 +134,7 @@ export const presets = {
     'Clean': {},
     'Cinematic': {
         camera: { focalLength: 50 },
-        lens: { dof: 'lens', fStop: 2, bokeh: 'anamorphic', anamorphic: 0.25, fringing: 2 },
+        lens: { dof: true, fStop: 2, bokeh: 'anamorphic', anamorphic: 0.25, fringing: 2 },
         light: { bloom: 0.04, bloomThreshold: 0.7, halation: 0.15 },
         color: { lut: 'teal & orange', lutIntensity: 0.7, enhance: true, vibrance: 0.15, highlights: -0.2 },
         vignette: { intensity: 0.35 },
@@ -146,7 +143,7 @@ export const presets = {
         shake: { style: 'handheld', amount: 0.2 }
     },
     'Dream': {
-        lens: { dof: 'lens', fStop: 1.2, bokeh: 'swirl', fringing: 6 },
+        lens: { dof: true, fStop: 1.2, bokeh: 'swirl', fringing: 6 },
         light: { exposure: 0.3, bloom: 0.12, bloomThreshold: 0.4, bloomBlur: 20, lightLeak: 0.5 },
         color: { grading: true, saturation: 0.85, contrast: 0.85, tint: '#ffe9f2', lut: 'faded film', lutIntensity: 0.6 },
         vignette: { intensity: 0.25, color: '#2a1030' },
@@ -210,7 +207,7 @@ export const presets = {
     'Vertigo': {
         dolly: { enabled: true },
         camera: { focalLength: 35 },
-        lens: { dof: 'lens', fStop: 2.8 },
+        lens: { dof: true, fStop: 2.8 },
         stylize: { letterbox: '1.85' }
     }
 };

@@ -3,12 +3,12 @@
 
 import GUI from 'lil-gui';
 import { presets, presetSettings, mergeInto } from './settings.js';
-import { looks, letterboxes, dofModes, bokehShapes } from './post.js';
+import { looks, letterboxes, bokehShapes } from './post.js';
 import { sensors } from './camera.js';
 import { qualityLevels } from './perf.js';
 
 export class Panel {
-    constructor(settings, { splats, luts, onLoad, onUnload, onResetCamera }) {
+    constructor(settings, { splats, luts, onLoad, onUnload, onResetCamera, measure }) {
         this.settings = settings;
         this.refreshQueued = false;
         this.preset = { name: 'Clean' };
@@ -54,19 +54,12 @@ export class Panel {
         const lens = gui.addFolder('Lens');
         lens.add(s.lens, 'autofocus', ['off', 'click', 'center']).name('Autofocus');
         lens.add(s.lens, 'focusSpeed', 0.5, 20, 0.1).name('Focus pull speed');
-        lens.add(s.lens, 'dof', dofModes).name('Depth of field').onChange(() => this.updateDofControls());
         lens.add(s.lens, 'focusDistance', 0.05, 100, 0.01).name('Focus distance');
-        this.dofControls = {
-            lens: [
-                lens.add(s.lens, 'fStop', 0.5, 22, 0.05).name('f-stop'),
-                lens.add(s.lens, 'bokeh', bokehShapes).name('Bokeh shape')
-            ],
-            fast: [
-                lens.add(s.lens, 'focusRange', 0.01, 20, 0.01).name('Focus range'),
-                lens.add(s.lens, 'blurRadius', 1, 12, 0.1).name('Blur size')
-            ]
-        };
-        lens.add(s.lens, 'nearBlur').name('Blur foreground');
+        lens.add(s.lens, 'dof').name('Depth of field').onChange(() => this.updateDofControls());
+        this.dofControls = [
+            lens.add(s.lens, 'fStop', 0.5, 22, 0.05).name('f-stop'),
+            lens.add(s.lens, 'bokeh', bokehShapes).name('Bokeh shape')
+        ];
         lens.add(s.lens, 'distortion', -0.3, 0.5, 0.005).name('Distortion (+barrel)');
         lens.add(s.lens, 'fringing', 0, 40, 0.1).name('Chromatic aberration');
         lens.add(s.lens, 'anamorphic', 0, 2, 0.01).name('Anamorphic streaks');
@@ -163,7 +156,11 @@ export class Panel {
         const scene = gui.addFolder('Scene');
         scene.add(s.scene, 'flip').name('Flip upside down');
         scene.addColor(s.scene, 'background').name('Background');
-        scene.add(s.scene, 'metersPerUnit', 0.01, 10, 0.01).name('Meters per unit');
+        scene.add(s.scene, 'metersPerUnit', 0.001, 10, 0.001).name('Meters per unit');
+        scene.add({ measure: () => measure.toggle() }, 'measure').name('Measure (M)');
+        scene.add(measure.ui, 'units').name('Measured (units)').disable();
+        scene.add(measure.ui, 'realLength', 0.01, 100, 0.01).name('Real length (m)');
+        scene.add({ apply: () => measure.applyScale() }, 'apply').name('Set scale from measurement');
         scene.add(s.scene, 'antiAlias').name('Splat anti-aliasing');
         scene.close();
 
@@ -183,11 +180,9 @@ export class Panel {
         this.fileInput.addEventListener('change', () => this.readImport());
     }
 
-    // only show the sliders that belong to the chosen DoF model
+    // the lens sliders only matter with depth of field on
     updateDofControls() {
-        const mode = this.settings.lens.dof;
-        for (const c of this.dofControls.lens) c.show(mode === 'lens');
-        for (const c of this.dofControls.fast) c.show(mode === 'fast');
+        for (const c of this.dofControls) c.show(this.settings.lens.dof);
     }
 
     // auto resolution drives the scale itself; fixed lets you set it

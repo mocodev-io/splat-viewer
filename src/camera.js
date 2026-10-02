@@ -20,6 +20,10 @@ const tmpV = new pc.Vec3();
 const tmpV2 = new pc.Vec3();
 const tmpM = new pc.Mat4();
 const tmpM2 = new pc.Mat4();
+const tmpM3 = new pc.Mat4();
+const tmpFwd = new pc.Vec3();
+const tmpRight = new pc.Vec3();
+const tmpMove = new pc.Vec3();
 
 function forwardFrom(yaw, pitch, out) {
     const cp = Math.cos(pitch * DEG);
@@ -87,11 +91,17 @@ export class CameraRig {
         // motion blur
         this.prevRotation = new pc.Mat4();
         this.prevProjection = new pc.Mat4();
+        this.prevView = new pc.Mat4();
         this.prevPosition = new pc.Vec3();
         this.hasPrev = false;
-        this.reproject = new pc.Mat4();
+        this.reproject = new pc.Mat4();      // rotation only: clip(now) -> clip(prev)
+        this.reprojectFull = new pc.Mat4();  // view(now) -> clip(prev), with real depth
+        this.tanHalf = new Float32Array(2);  // view-space extent of the frame at depth 1
         this.camMotion = new Float32Array(3);
         this.blurScale = 0;
+
+        // set by the measure tool: gets first say on a click
+        this.clickHandler = null;
 
         // picking for autofocus / pivot
         this.picker = null;
@@ -180,10 +190,14 @@ export class CameraRig {
         if (start && this.pointers.size === 0) {
             const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
             const quick = performance.now() - start.t < 350;
-            if (moved < 5 && quick && p.button === 0 && this.settings.lens.autofocus === 'click') {
-                this.pickAt(e.clientX, e.clientY).then(point => {
-                    if (point) this.setFocusPoint(point);
-                });
+            if (moved < 5 && quick && p.button === 0) {
+                if (this.clickHandler?.(e.clientX, e.clientY)) {
+                    // handled by the measure tool
+                } else if (this.settings.lens.autofocus === 'click') {
+                    this.pickAt(e.clientX, e.clientY).then(point => {
+                        if (point) this.setFocusPoint(point);
+                    });
+                }
             }
         }
         if (this.pointers.size < 2) this.pinchDistance = 0;
@@ -204,6 +218,7 @@ export class CameraRig {
     }
 
     async onDoubleClick(e) {
+        if (this.clickHandler) return;      // measuring: clicks are points
         const point = await this.pickAt(e.clientX, e.clientY);
         if (!point) return;
         // orbit around the point we clicked, without moving the camera
@@ -333,13 +348,14 @@ export class CameraRig {
         }
     }
 
-    setFocusPoint(point) {
+    // Focus distance is depth along the view axis, as the lens formula wants.
+    setFocusPoint(point, quiet = false) {
         const fwd = this.entity.forward;
         const depth = tmpV.sub2(point, this.entity.getPosition()).dot(fwd);
         if (depth > 0) {
             this.settings.lens.focusDistance = depth;
             this.events.onSettingsChanged();
-            this.events.onStatus(`focus ${depth.toPrecision(3)}`);
+            if (!quiet) this.events.onStatus(`focus ${depth.toPrecision(3)}`);
         }
     }
 
@@ -365,9 +381,10 @@ export class CameraRig {
         const slow = k.has('ControlLeft') || k.has('ControlRight');
         if (ax || ay || az) {
             const speed = cam.moveSpeed * (fast ? 4 : 1) * (slow ? 0.25 : 1) * dt;
-            const fwd = forwardFrom(this.target.yaw, this.target.pitch, new pc.Vec3());
-            const right = new pc.Vec3().cross(fwd, pc.Vec3.UP).normalize();
-            const move = fwd.mulScalar(az).add(right.mulScalar(ax)).add(new pc.Vec3(0, ay, 0));
+            const fwd = forwardFrom(this.target.yaw, this.target.pitch, tmpFwd);
+            const right = tmpRight.cross(fwd, pc.Vec3.UP).normalize();
+            const move = tmpMove.copy(fwd).mulScalar(az).add(right.mulScalar(ax));
+            move.y += ay;
             if (move.lengthSq() > 1) move.normalize();
             move.mulScalar(speed);
             this.target.position.add(move);
@@ -414,7 +431,7 @@ export class CameraRig {
                 this.pickTimer = 0.2;
                 this.lastPickPose.copy(this.entity.getWorldTransform());
                 const r = this.canvas.getBoundingClientRect();
-                this.pickAt(r.left + r.width / 2, r.top + r.height / 2).then(p => p && this.setFocusPoint(p));
+                this.pickAt(r.left + r.width / 2, r.top + r.height / 2).then(p => p && this.setFocusPoint(p, true));
             }
         }
         const fa = 1 - Math.exp(-dt * lens.focusSpeed);
@@ -465,7 +482,9 @@ export class CameraRig {
             const { subject, d0, focal0 } = this.dolly;
             const d = Math.max(this.current.position.distance(subject), 0.01);
             this.focalLength = pc.math.clamp(focal0 * d / d0, 4, 600);
-            s.lens.focusDistance = d;
+            // focus stays on the subject, measured along the view axis
+            const fwd = forwardFrom(this.current.yaw, this.current.pitch, tmpFwd);
+            s.lens.focusDistance = Math.max(tmpV.sub2(subject, this.current.position).dot(fwd), 0.01);
         } else {
             this.focalLength = s.camera.focalLength;
         }
@@ -493,40 +512,50 @@ export class CameraRig {
             pitch += Math.sin(phase * 2) * p.bob * 15;
         }
         const e = this.entity;
-        const offset = new pc.Vec3()
-            .add(e.right.clone().mulScalar(px * scale * amount))
-            .add(e.up.clone().mulScalar(py * scale * amount))
-            .add(e.forward.clone().mulScalar(pz * scale * amount));
+        const offset = tmpMove.copy(e.right).mulScalar(px * scale * amount)
+            .add(tmpV.copy(e.up).mulScalar(py * scale * amount))
+            .add(tmpV2.copy(e.forward).mulScalar(pz * scale * amount));
         e.translate(offset);
         e.rotateLocal(pitch * amount, yaw * amount, roll * amount);
     }
 
-    // Rotation-only reprojection (exact without depth) + translation estimate.
+    // Per-pixel motion of the last frame for motion blur. With the scene depth
+    // the shader reprojects every pixel exactly (reprojectFull). Without it,
+    // rotation is still exact (reproject) and translation is estimated with
+    // the focus distance as the depth (camMotion).
     updateMotion(dt) {
         const e = this.entity;
+        const world = e.getWorldTransform();
         const rotation = tmpM.setTRS(pc.Vec3.ZERO, e.getRotation(), pc.Vec3.ONE);
         const projection = this.camera.projectionMatrix;
+        const aspect = this.camera.aspectRatio || 1;
+        const tanHalf = Math.tan(this.fov * DEG / 2);
+        this.tanHalf[0] = tanHalf * aspect;
+        this.tanHalf[1] = tanHalf;
 
         if (!this.hasPrev || dt <= 0) {
             this.prevRotation.copy(rotation);
             this.prevProjection.copy(projection);
+            this.prevView.copy(world).invert();
             this.prevPosition.copy(e.getPosition());
             this.hasPrev = true;
             this.reproject.setIdentity();
+            this.reprojectFull.copy(projection);
             this.camMotion.fill(0);
             this.blurScale = 0;
             return;
         }
 
-        // clip(now) -> view(now) -> world -> view(prev) -> clip(prev)
+        // view(now) -> world -> view(prev) -> clip(prev)
+        this.reprojectFull.copy(this.prevProjection).mul(this.prevView).mul(world);
+
+        // clip(now) -> view(now) -> world -> view(prev) -> clip(prev), rotation only
         const invProjection = tmpM2.copy(projection).invert();
-        const prevViewRot = new pc.Mat4().copy(this.prevRotation).transpose();
+        const prevViewRot = tmpM3.copy(this.prevRotation).transpose();
         this.reproject.copy(this.prevProjection).mul(prevViewRot).mul(rotation).mul(invProjection);
 
         const delta = tmpV.sub2(e.getPosition(), this.prevPosition);
         const depth = Math.max(this.focus, 0.1);
-        const tanHalf = Math.tan(this.fov * DEG / 2);
-        const aspect = this.camera.aspectRatio || 1;
         this.camMotion[0] = -delta.dot(e.right) / (depth * 2 * tanHalf * aspect);
         this.camMotion[1] = -delta.dot(e.up) / (depth * 2 * tanHalf);
         this.camMotion[2] = delta.dot(e.forward) / depth;
@@ -536,6 +565,7 @@ export class CameraRig {
 
         this.prevRotation.copy(rotation);
         this.prevProjection.copy(projection);
+        this.prevView.copy(world).invert();
         this.prevPosition.copy(e.getPosition());
     }
 }

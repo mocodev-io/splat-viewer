@@ -1,13 +1,14 @@
 // Replacement for the engine's `composePS` chunk (PlayCanvas 2.23, GLSL / WebGL2).
 //
-// The engine's own compose pass applies bloom, DoF, SSAO, grading, LUT, vignette
-// etc. This copy keeps every one of those #ifdef blocks exactly where the engine
-// has them and adds the "sv_" stages around them:
+// The engine's own compose pass applies bloom, SSAO, grading, LUT, vignette
+// etc. This copy keeps those #ifdef blocks where the engine has them, drops the
+// engine's DoF and fringing (replaced by the lens model and our own chromatic
+// aberration) and adds the "sv_" stages around them:
 //
 //   screen warps (crt curve, lens distortion, gate weave, glitch, pixelate)
-//   -> scene sample with chromatic aberration (kuwahara, lens DoF, motion blur,
-//      glitch colour split)
-//   -> engine: sharpen (in focus only), dof ("fast" mode only), ssao, bloom
+//   -> scene sample with chromatic aberration (kuwahara, thin-lens DoF,
+//      motion blur, glitch colour split)
+//   -> engine: sharpen (in focus only), ssao, bloom
 //   -> hdr extras (halation, anamorphic streaks, lens dirt, exposure, flicker, light leak)
 //   -> engine: colour enhance, grading, tonemap, LUT, vignette
 //   -> display stylize (posterize, looks, paper, outline)
@@ -28,12 +29,10 @@ export const composePS = /* glsl */ `
     uniform vec2 sceneTextureInvRes;
     uniform float composeTargetFlipY;
     #include "composeBloomPS"
-    #include "composeDofPS"
     #include "composeSsaoPS"
     #include "composeGradingPS"
     #include "composeColorEnhancePS"
     #include "composeVignettePS"
-    #include "composeFringingPS"
     #include "composeCasPS"
     #include "composeColorLutPS"
     #include "composeDeclarationsPS"
@@ -52,18 +51,18 @@ export const composePS = /* glsl */ `
 
     uniform float sv_motionBlur;
     uniform mat4 sv_reproject;
+    uniform mat4 sv_reprojectFull;
+    uniform vec2 sv_tanHalf;
     uniform vec3 sv_camMotion;
     uniform float sv_kuwahara;
 
-    // depth of field: 0 off, 1 engine ("fast"), 2 thin lens
-    uniform int sv_dofMode;
+    // thin-lens depth of field; off when sv_dofMaxRadius is 0
     uniform highp sampler2D uSceneDepthMap;
     uniform int sv_depthMode;          // 0 unavailable, 1 linear, 2 reciprocal (splat scene depth)
     uniform float sv_far;
     uniform float sv_focus;            // focus distance, world units
-    uniform float sv_aperture;         // blur radius at infinity, scene pixels
-    uniform float sv_dofMaxRadius;     // largest blur radius, scene pixels
-    uniform float sv_nearBlur;         // 1 = blur in front of the focus plane too
+    uniform float sv_aperture;         // blur radius of a point at infinity, scene pixels
+    uniform float sv_dofMaxRadius;     // largest blur radius (performance cap), scene pixels
     uniform int sv_bokeh;              // 0 round, 1 hexagon, 2 octagon, 3 anamorphic, 4 swirl
     uniform float sv_dofSeed;          // 0 = fixed pattern; changes per frame when TAA can average it
     uniform float sv_dofSamples;       // gather samples (quality level)
@@ -206,16 +205,29 @@ export const composePS = /* glsl */ `
 
     // --------------------------------------------------------- scene sample
 
-    // Per-pixel screen motion of the last frame. Camera rotation is exact
-    // (reprojection does not need depth for it); translation is approximated
-    // with the focus distance as the scene depth.
+    // Linear depth of the splats along the view axis.
+    float svDepth(vec2 uv) {
+        float v = texture2DLod(uSceneDepthMap, uv, 0.0).r;
+        if (sv_depthMode == 2) return v > 0.0 ? 1.0 / v : sv_far;
+        return v;
+    }
+
+    // Per-pixel screen motion of the last frame. With the scene depth every
+    // pixel is reprojected exactly into the previous frame. Without it,
+    // rotation is still exact and translation is estimated with the focus
+    // distance as the depth.
     vec2 svVelocity(vec2 uv) {
-        vec4 prev = sv_reproject * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+        vec2 ndc = uv * 2.0 - 1.0;
         vec2 v = vec2(0.0);
-        if (prev.w > 0.0) {
-            v = uv - ((prev.xy / prev.w) * 0.5 + 0.5);
+        if (sv_depthMode > 0) {
+            float z = svDepth(uv);
+            vec4 prev = sv_reprojectFull * vec4(ndc * sv_tanHalf * z, -z, 1.0);
+            if (prev.w > 0.0) v = uv - ((prev.xy / prev.w) * 0.5 + 0.5);
+        } else {
+            vec4 prev = sv_reproject * vec4(ndc, 1.0, 1.0);
+            if (prev.w > 0.0) v = uv - ((prev.xy / prev.w) * 0.5 + 0.5);
+            v += (uv - 0.5) * sv_camMotion.z + sv_camMotion.xy;
         }
-        v += (uv - 0.5) * sv_camMotion.z + sv_camMotion.xy;
         v *= sv_motionBlur;
         float len = length(v);
         return len > 0.08 ? v * (0.08 / len) : v;
@@ -253,19 +265,12 @@ export const composePS = /* glsl */ `
 
     // ------------------------------------------------------- lens DoF
 
-    float svDepth(vec2 uv) {
-        float v = texture2DLod(uSceneDepthMap, uv, 0.0).r;
-        if (sv_depthMode == 2) return v > 0.0 ? 1.0 / v : sv_far;
-        return v;
-    }
-
-    // Thin lens: the blur circle grows with |1/focus - 1/depth|. Behind the
-    // focus plane it levels off towards the aperture size, in front of it it
-    // grows fast, like a real lens.
+    // Thin lens: the blur circle of a point at depth D, with the lens focused
+    // at S, is the infinity blur times |1 - S/D|. Behind the focus plane it
+    // levels off towards the infinity size, in front of it it keeps growing.
+    // Depth is distance along the view axis, as the lens formula wants.
     float svCoc(float depth) {
-        float c = (1.0 - sv_focus / max(depth, 1e-4)) * sv_aperture;
-        if (c < 0.0) c *= sv_nearBlur;
-        return min(abs(c), sv_dofMaxRadius);
+        return min(abs(1.0 - sv_focus / max(depth, 1e-4)) * sv_aperture, sv_dofMaxRadius);
     }
 
     // Shapes the sample pattern: a disc becomes polygon, oval or swirl.
@@ -355,7 +360,7 @@ export const composePS = /* glsl */ `
         if (sv_kuwahara > 0.0) {
             col = svKuwahara(uv, sv_kuwahara);
         } else {
-            if (sv_dofMode == 2 && sv_depthMode > 0 && sv_dofMaxRadius > 0.5) {
+            if (sv_depthMode > 0 && sv_dofMaxRadius > 0.0) {
                 col = svLensDof(uv, base);
             }
             if (sv_motionBlur > 0.0) {
@@ -491,9 +496,6 @@ export const composePS = /* glsl */ `
             // detail back into what the DoF just softened
             result = mix(applyCas(result, uv, sharpness), result, clamp(svDofBlur / 1.5, 0.0, 1.0));
         #endif
-        #ifdef DOF
-            if (sv_dofMode == 1) result = applyDof(result, uv);
-        #endif
         #ifdef SSAO_TEXTURE
             result = applySsao(result, uv);
         #endif
@@ -573,10 +575,6 @@ export const composePS = /* glsl */ `
                 result = scene.rgb;
             #elif defined(BLOOM) && DEBUG_COMPOSE == bloom
                 result = dBloom * bloomIntensity;
-            #elif defined(DOF) && DEBUG_COMPOSE == dofcoc
-                result = vec3(dCoc, 0.0);
-            #elif defined(DOF) && DEBUG_COMPOSE == dofblur
-                result = dBlur;
             #elif defined(SSAO_TEXTURE) && DEBUG_COMPOSE == ssao
                 result = vec3(dSsao);
             #elif defined(VIGNETTE) && DEBUG_COMPOSE == vignette

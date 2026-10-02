@@ -71,6 +71,7 @@ Ten looks are built in. You can add your own:
 | O | fly / orbit |
 | V | dolly zoom |
 | R | reset camera |
+| M | measure: click two points |
 | H | hide interface |
 | ? | help |
 
@@ -85,15 +86,14 @@ Touch works too: one finger looks or orbits, two fingers pinch and pan.
   and speed.
 - **Lens:** autofocus (click or continuous centre) with focus pull speed,
   barrel/pincushion distortion, chromatic aberration, anamorphic streaks,
-  lens dirt. Two depth of field models:
-  - *lens*: thin-lens blur on full resolution, computed from focal length,
-    f-stop (down to f/0.5, beyond real lenses), focus distance and sensor. Blurred foreground spills over sharp
-    background, highlights turn into bokeh, chromatic aberration blurs along.
-    Bokeh shape: round, hexagon, octagon, anamorphic, swirl. Set
-    **Scene → Meters per unit** once per scene, so the lens maths knows how
-    big the scene is.
-  - *fast*: the engine's half-resolution DoF with a sharp focus range.
-    Cheaper, but with harder edges.
+  lens dirt, and thin-lens depth of field: the blur follows from focal
+  length, f-stop (down to f/0.5, beyond real lenses), focus distance and
+  sensor, in front of and behind the focus plane. Blurred foreground spills
+  over sharp background, highlights turn into bokeh, chromatic aberration
+  blurs along. Bokeh shape: round, hexagon, octagon, anamorphic, swirl.
+- **Measure (M):** click two points, enter their real length, and *Set scale*
+  fills in **Scene → Meters per unit**, so the lens maths knows the real size
+  of the scene. Do this once per scene.
 - **Light:** exposure, tone mapping (ACES, ACES2, Filmic, Hejl, Neutral,
   Linear), bloom, halation, light leaks, ambient occlusion.
 - **Fog & sun:** volumetric height fog, with optional light shafts through
@@ -134,17 +134,23 @@ switch bloom on in the background when used.
 
 ## How it works
 
-The engine's `CameraFrame` handles bloom, DoF, fog, SSAO, TAA, grading, LUT
-and vignette. `src/compose.js` replaces the engine's final compose shader
-with a copy that adds the camera and stylize stages around the engine's own
-steps. Every effect is switched by a uniform, so toggling an effect never
-recompiles a shader.
+The engine's `CameraFrame` handles bloom, fog, SSAO, TAA, grading, LUT and
+vignette. `src/compose.js` replaces the engine's final compose shader with a
+copy that adds the lens (thin-lens DoF, chromatic aberration), camera and
+stylize stages around the engine's own steps. Every effect is switched by a
+uniform, so toggling an effect never recompiles a shader.
+
+DoF and motion blur read the depth the splats write. The engine only renders
+that depth for its own effects, so `post.js` adds one more reason to the
+engine's option check; it never falls back to a depth prepass, which would
+render every splat twice.
 
 ```
 src/
   main.js      app setup, splat loading, frame loop
   camera.js    camera rig: controls, shake, dolly zoom, autofocus, motion data
-  post.js      settings -> CameraFrame + compose uniforms
+  post.js      settings -> CameraFrame + compose uniforms, lens maths
+  measure.js   measure tool and its overlay
   compose.js   the compose shader
   luts.js      built-in looks, .cube / PNG LUT loading
   perf.js      quality levels, auto resolution
