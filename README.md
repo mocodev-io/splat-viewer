@@ -65,11 +65,21 @@ distance, no separate field of view.
   1990), in linear HDR before tone mapping, as a sensor collects light.
   Occlusion, blurred edges that turn see-through, bright bokeh and the
   soft splat edges all come out right without any depth tricks. One
-  sample is added per frame and the still fades in over the first few;
-  the HUD shows the progress (`still 12/48`). While the camera moves, a
-  quick single-pass approximation stands in (the thin-lens circle of
-  confusion `c = f² / (N·(S − f)) · |d − S| / d`, gathered in the compose
-  shader).
+  sample is added per frame; the HUD shows the progress (`still 12/48`).
+  While the camera moves, a quick single-pass approximation stands in
+  (the thin-lens circle of confusion `c = f² / (N·(S − f)) · |d − S| / d`,
+  gathered in the compose shader).
+- The still starts as soon as the image stops moving: the camera counts
+  as still when the image shifts less than 0.1 px from one frame to the
+  next, so the eased-out tail of the camera controls does not hold it up
+  (it starts over once the image drifts more than half a pixel). The few
+  samples of the first frames would show as separate copies, stepped lines
+  along sharp edges, so the average gets an *over-blur* on top, as in
+  Blender EEVEE: the quick DoF with each blur circle scaled to 1.5 / √n
+  after n samples (at most the full blur), about the gap between the lens
+  points. The image refines smoothly from the moving view to the exact
+  one; a little of it stays in the finished still (0.2 of the blur at
+  medium), which softens bokeh edges slightly.
 - **Still quality** is the number of aperture samples: low 16, medium 48,
   high 128. More samples give smoother bokeh and take longer to finish.
 - **Bokeh** (with DoF on) is the shape of the aperture the still is

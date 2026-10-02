@@ -63,16 +63,19 @@ const accumulateGLSL = /* glsl */ `
     }
 `;
 
-// The weighted average, for the passes after the scene pass.
+// The weighted average, for the passes after the scene pass. Its alpha is
+// the coverage of the current sample, which the DoF needs to correct the
+// splat depth (lensDof.ts) for the over-blur.
 const averageGLSL = /* glsl */ `
     varying vec2 uv0;
     uniform sampler2D still_sum;
     uniform sampler2D still_scene;
     void main() {
         vec4 sum = texture2D(still_sum, uv0);
+        vec4 scene = texture2D(still_scene, uv0);
         // a corner pixel can still be without samples in the first few
-        vec3 c = sum.a > 1e-3 ? sum.rgb / sum.a : texture2D(still_scene, uv0).rgb;
-        gl_FragColor = vec4(c, 1.0);
+        vec3 c = sum.a > 1e-3 ? sum.rgb / sum.a : scene.rgb;
+        gl_FragColor = vec4(c, scene.a);
     }
 `;
 

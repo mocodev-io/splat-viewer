@@ -174,13 +174,13 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     });
 
     // Focus and image size change between frames, so the lens is set per
-    // frame. The gather is off for aperture samples: those are sharp views
-    // through one point of the lens.
+    // frame. On a still the gather works on the accumulated average, as the
+    // shrinking over-blur (useStillDof.ts).
     useAppEvent('prerender', () => {
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
-        const gather = (lens.dof || debugView === 'blur amount') && still.current.mode === 'moving';
-        updateLensDof(app, cf, lens, focus.current, gather, depthView);
+        const blur = lens.dof || debugView === 'blur amount' ? still.current.overblur : 0;
+        updateLensDof(app, cf, lens, focus.current, blur, still.current.mode !== 'moving', depthView);
     });
 
     return (

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { Mat4, type AppBase } from 'playcanvas';
+import { Mat4, Quat, Vec3, type AppBase } from 'playcanvas';
 import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
@@ -24,31 +24,54 @@ type StillDofOptions = {
     progress: RefObject<string>;         // short status for the HUD
 };
 
-const smoothstep = (a: number, b: number, x: number) => {
-    const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
-    return t * t * (3 - 2 * t);
-};
+// The camera counts as standing still when the image moves less than this
+// from one frame to the next (pixels); the still starts over once it has
+// drifted further than DRIFT_PX from where it started. The damped camera
+// controls keep easing out for half a second after a move, far below what
+// can be seen; this lets the still start as soon as the image looks still.
+const STEP_PX = 0.1;
+const DRIFT_PX = 0.5;
+
+// Over-blur: while the still builds up, its average gets a little of the
+// gather DoF on top (Blender EEVEE does the same), radius OVERBLUR / √n (at
+// most 1, the moving view) of
+// each pixel's blur circle after n samples. The few aperture samples of the
+// first frames would otherwise show as separate copies, stepped lines along
+// sharp edges; the extra blur, about the gap between lens points, runs them
+// together (N points over a disc of radius R lie about 2R / √N apart, so the
+// blur that closes the gaps is about 1.5 R / √N). It shrinks as the samples
+// fill the aperture, so the image refines
+// smoothly from the moving view to the exact one; in-focus parts have no blur
+// circle and stay sharp.
+const OVERBLUR = 1.5;
+
+type Pose = { p: Vec3; r: Quat };
+const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
 
 // Drives StillFrames and keeps the GPU quiet when nothing changes.
 //
 // - moving: a normal frame each frame (with the gather DoF when the lens DoF
 //   is on);
-// - still (nothing changed for a moment, lens DoF on): one aperture sample
-//   per frame until the quality's count, fading in over the last moving
-//   frame; the camera is moved over the aperture (its shape gives the bokeh,
-//   aperture.ts) and its frustum sheared so the focus plane stays in place;
-//   the samples are averaged in HDR inside the frame (stillFrames.ts);
+// - still (the image stopped moving, lens DoF on): one aperture sample per
+//   frame until the quality's count; the camera is moved over the aperture
+//   (its shape gives the bokeh, aperture.ts) and its frustum sheared so the
+//   focus plane stays in place; the samples are averaged in HDR inside the
+//   frame (stillFrames.ts), with a shrinking over-blur on top;
 // - done, or nothing changed for a second without lens DoF: no rendering at
 //   all until something changes (the canvas keeps the last image).
 //
-// Returns whether this frame is an aperture sample (the gather is off then).
+// Returns the state: the mode, and `overblur`, the gather radius scale for
+// this frame (1 while moving).
 export function useStillDof({ app, controls, frame, lens, focus, accumulate, busy, sceneKey, progress }: StillDofOptions) {
     const still = useRef<StillFrames | null>(null);
     const state = useRef({
-        key: '',
+        other: '',                                   // everything but the camera pose that changes the image
         changedAt: 0,
         mode: 'moving' as Mode,
         start: false,
+        prev: pose(),                                // the pose of the previous tick
+        anchor: pose(),                              // the pose the still started at
+        overblur: 1,
         jitter: null as null | { x: number; y: number; focus: number },
         aperture: null as Aperture | null
     });
@@ -106,24 +129,41 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         const sf = still.current;
         if (!cc || !sf) return;
         const { focus, accumulate, busy, sceneKey, lens } = live.current;
-        const p = cc.entity.getPosition();
-        const r = cc.entity.getRotation();
-        const key = [p.x, p.y, p.z, r.x, r.y, r.z, r.w].map(v => v.toFixed(5)).join(',')
-            + `|${focus.current.toFixed(4)}|${app.graphicsDevice.width}x${app.graphicsDevice.height}|${sceneKey}`;
         const s = state.current;
         const now = performance.now();
-        if (key !== s.key || busy) {
-            s.key = key;
+        const camera = cc.entity.camera!;
+        const { width, height } = app.graphicsDevice;
+
+        // How far the image moves between two poses, in pixels: the turn
+        // through the focal length in pixels, and the shift as seen at half
+        // the focus distance (nearer things move more, far less).
+        const focalPx = (camera.horizontalFov ? width : height) / (2 * Math.tan(camera.fov * Math.PI / 360));
+        const reach = Math.max(focus.current / lens.metersPerUnit * 0.5, camera.nearClip);
+        const current: Pose = { p: cc.entity.getPosition(), r: cc.entity.getRotation() };
+        const movedPx = (a: Pose, b: Pose) => {
+            const d = Math.abs(a.r.x * b.r.x + a.r.y * b.r.y + a.r.z * b.r.z + a.r.w * b.r.w);
+            const turn = 2 * Math.acos(Math.min(d, 1));
+            return (turn + a.p.distance(b.p) / reach) * focalPx;
+        };
+        const step = movedPx(s.prev, current);
+        s.prev.p.copy(current.p);
+        s.prev.r.copy(current.r);
+        const drift = s.mode === 'moving' ? 0 : movedPx(s.anchor, current);
+
+        const other = `${focus.current.toFixed(4)}|${width}x${height}|${sceneKey}`;
+        const moving = other !== s.other || busy || step > STEP_PX || drift > DRIFT_PX;
+        if (moving) {
+            s.other = other;
             s.changedAt = now;
             s.mode = 'moving';
             app.autoRender = true;
-        }
-        const quiet = now - s.changedAt;
-        if (s.mode === 'moving' && accumulate && quiet > 150) {
+        } else if (s.mode === 'moving' && accumulate) {
             s.mode = 'still';
             s.start = true;
+            s.anchor.p.copy(current.p);
+            s.anchor.r.copy(current.r);
         }
-        if (s.mode === 'moving' && !accumulate && quiet > 1000) app.autoRender = false;
+        if (s.mode === 'moving' && !accumulate && now - s.changedAt > 1000) app.autoRender = false;
 
         const total = STILL_SAMPLES[lens.blurQuality];
         progress.current = s.mode === 'still' ? `still ${sf.count}/${total}` : s.mode === 'done' ? 'still' : '';
@@ -140,6 +180,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         if (s.mode !== 'still') {
             // done: a stray render still shows the finished average
             sf.prepare(engine, s.mode === 'done', null);
+            s.overblur = s.mode === 'done' ? Math.min(OVERBLUR / Math.sqrt(Math.max(sf.count, 1)), 1) : 1;
             return;
         }
         if (s.start) {
@@ -152,6 +193,8 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
         sf.prepare(engine, true, [u, v, lens.catsEye]);
+        // the average composed this frame holds count + 1 samples
+        s.overblur = Math.min(OVERBLUR / Math.sqrt(sf.count + 1), 1);
     });
 
     useAppEvent('postrender', () => {
@@ -159,7 +202,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         if (!sf) return;
         const s = state.current;
         if (s.mode === 'still') {
-            sf.present(true, smoothstep(2, 10, sf.count));
+            // a short fade: with the over-blur the first sample already looks
+            // much like the moving frame it follows
+            sf.present(true, Math.min(sf.count / 2, 1));
             if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality]) {
                 s.mode = 'done';
                 app.autoRender = false;

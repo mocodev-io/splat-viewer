@@ -123,8 +123,7 @@ const composeDofGLSL = /* glsl */ `
         // The result is the foreground laid over the pixel's own blur by that
         // coverage.
         vec3 applyDof(vec3 base, vec2 uv) {
-            // no gather: lens DoF off, or the camera is still and the DoF is
-            // accumulated over the aperture instead
+            // no gather: lens DoF off (or a debug view that keeps the image sharp)
             if (lens_params.y <= 0.0) {
                 dCoc = vec2(0.0);
                 return base;
@@ -254,17 +253,25 @@ export function installLensDof(app: AppBase) {
 /** Normalized depth view: 0 off, 1 linear, 2 inverse. */
 export type DepthView = 0 | 1 | 2;
 
-// The gather only stands in while the camera moves (a still is accumulated
-// over the aperture, stillFrames.ts), so it has one fixed setting: samples,
+// The gather stands in while the camera moves, and adds a shrinking
+// over-blur while a still is accumulated over the aperture (useStillDof.ts),
+// so it has one fixed setting: samples,
 // depth probes and the largest blur radius as a fraction of the image height.
 const GATHER = { samples: 32, probes: 16, maxBlur: 0.025 };
+// The over-blur on a still is a fraction of the full blur, but that fraction
+// of a strongly blurred foreground is still more than the moving limit; one
+// frame of a larger radius costs the same number of samples.
+const OVERBLUR_MAX = 0.08;
 
 /**
  * Sets the engine's DoF to its cheapest (it only has to provide the scene
  * depth and the compose hook) and the lens uniforms for this frame.
- * `focus` in meters; `blur` false keeps the image sharp (debug views).
+ * `focus` in meters; `blur` scales every blur circle: 1 for the lens, less
+ * for the over-blur on a still being accumulated (useStillDof.ts), 0 keeps
+ * the image sharp (debug views); `still` allows the over-blur its larger
+ * radius limit.
  */
-export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: boolean, view: DepthView) {
+export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, still: boolean, view: DepthView) {
     const dof = cf.dof;
     dof.highQuality = false;
     dof.nearBlur = false;
@@ -284,7 +291,8 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const scope = device.scope;
     // the soft rim of splat edges, roughly a percent of the image height
     const edgeBand = 0.01 * device.height;
-    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, blur ? radiusPx : 0, q.maxBlur * device.height, edgeBand]);
+    const maxBlur = still ? OVERBLUR_MAX : q.maxBlur;
+    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, maxBlur * device.height, edgeBand]);
     scope.resolve('lens_quality').setValue([q.samples, q.probes, reciprocal ? 2 : 1, camera.farClip]);
     scope.resolve('lens_view').setValue(view);
 }
