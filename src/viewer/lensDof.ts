@@ -37,7 +37,7 @@ const composeDofGLSL = /* glsl */ `
             vec3 applyDof(vec3 base, vec2 uv) { return base; }
         #else
         uniform highp sampler2D uSceneDepthMap;
-        uniform vec3 lens_params;    // focus (scene units), c∞ (pixels, radius), max radius (pixels)
+        uniform vec4 lens_params;    // focus (scene units), c∞ (pixels, radius), max radius, edge band (pixels)
         uniform vec4 lens_quality;   // samples, depth probes, depth format (1 linear, 2 reciprocal), far
 
         float lensDepth(vec2 uv) {
@@ -94,17 +94,26 @@ const composeDofGLSL = /* glsl */ `
             // How far to gather: this pixel's own blur, or further when a
             // nearer, more blurred neighbour reaches over it. The widening
             // fades in with how well the neighbour reaches, so spill edges move
-            // smoothly while focusing. Sharp pixels with nothing blurred in
-            // front of them stop here, which is most of the frame.
+            // smoothly while focusing. The probes are spaced evenly in radius:
+            // a neighbour at distance r spills when its blur reaches r, so
+            // small radii matter as much as large ones.
+            // Splat edges are soft, and the depth there is a coverage-weighted
+            // mix that only reaches the object's real depth some pixels in
+            // (lens_params.w). A neighbour therefore counts as reaching when
+            // its blur plus that band does; otherwise the soft rim of a
+            // blurred object keeps a sharp, dark seam. An object in focus has
+            // no blur to spread, so its edge stays crisp.
+            // Sharp pixels with nothing blurred in front of them stop here,
+            // which is most of the frame.
             float reach = centerSize;
             for (int i = 0; i < 32; i++) {
                 if (float(i) >= lens_quality.y) break;
-                float r = maxR * sqrt((float(i) + 0.5) / lens_quality.y);
+                float r = maxR * (float(i) + 0.5) / lens_quality.y;
                 float a = spin + float(i) * 2.39996323;
                 float d = lensDepth(uv + vec2(cos(a), sin(a)) * r * sceneTextureInvRes);
                 if (d < centerDepth) {
                     float size = lensCoc(d);
-                    reach = max(reach, mix(reach, size, smoothstep(r * 0.5, r, size)));
+                    reach = max(reach, mix(reach, size, smoothstep(r * 0.5, r, size + lens_params.w)));
                 }
             }
             reach = min(reach, maxR);
@@ -151,9 +160,9 @@ export function installLensDof(app: AppBase) {
 // a fraction of the image height: more samples keep a bigger blur smooth.
 type BlurQuality = typeof BLUR_QUALITIES[number];
 const QUALITY: Record<BlurQuality, { samples: number; probes: number; maxBlur: number }> = {
-    low: { samples: 24, probes: 8, maxBlur: 0.015 },
-    medium: { samples: 48, probes: 12, maxBlur: 0.025 },
-    high: { samples: 96, probes: 16, maxBlur: 0.04 }
+    low: { samples: 24, probes: 12, maxBlur: 0.015 },
+    medium: { samples: 48, probes: 16, maxBlur: 0.025 },
+    high: { samples: 96, probes: 24, maxBlur: 0.04 }
 };
 
 /**
@@ -179,6 +188,8 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const camera = cf.entity.camera!;
     const reciprocal = (camera as unknown as { shaderParams: { sceneDepthMapReciprocal: boolean } }).shaderParams.sceneDepthMapReciprocal;
     const scope = device.scope;
-    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, blur ? radiusPx : 0, q.maxBlur * device.height]);
+    // the soft rim of splat edges, roughly a percent of the image height
+    const edgeBand = 0.01 * device.height;
+    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, blur ? radiusPx : 0, q.maxBlur * device.height, edgeBand]);
     scope.resolve('lens_quality').setValue([q.samples, q.probes, reciprocal ? 2 : 1, camera.farClip]);
 }

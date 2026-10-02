@@ -183,10 +183,13 @@ Notes:
   only for the scene depth and that hook, with its own blur passes at their
   cheapest. When bumping the engine, check that chunk still has the same
   place in the compose shader.
-- At a silhouette the splat depth is a coverage-weighted mix of the near and
-  the far surface, which can land exactly on the focus plane. The DoF looks
-  at the depth around such pixels, so a blurred object does not get a thin
-  sharp outline.
+- Splat edges are soft, and the depth there is a coverage-weighted mix of
+  the near and the far surface that only reaches the object's real depth
+  some pixels in; it can also land exactly on the focus plane. The DoF
+  therefore lets a blurred object's blur reach about 1 % of the image height
+  further than its own size, so its soft rim blurs with it instead of
+  leaving a sharp, dark seam. An object in focus has no blur to spread and
+  keeps a crisp edge.
 - A new engine `Picker` returns a wrong point for its very first pick (seen
   with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post
