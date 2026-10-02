@@ -63,7 +63,9 @@ distance, no separate field of view.
     moves the AF point, **AF center** puts it back (and switches to auto).
     It measures only when the camera, the AF point or the scene changed,
     at most four times a second, and moves the focus to each new distance
-    in **AF transition s** (0 is instant, longer is a slow focus pull).
+    in **AF transition s** (0 is instant, longer is a slow focus pull). It
+    moves in 1 / distance, as a focus ring moves the lens, so the blur runs
+    off just as smoothly pulling away from the camera as towards it.
     Switching back to manual keeps the distance it reached. A click outside
     the frame puts the AF point on its nearest edge. **AF frame**
     hides the frame for a clean image; focusing goes on.

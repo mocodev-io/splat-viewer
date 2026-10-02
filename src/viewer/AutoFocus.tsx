@@ -60,9 +60,14 @@ export function AutoFocus({ active, showFrame, point, frameAspect, transition, m
         }
 
         if (target.current !== null) {
-            // exponential approach: about 95 % of the way after `transition`
+            // Exponential approach, about 95 % of the way after `transition`,
+            // in 1 / distance: that is what the focus ring moves (the lens
+            // extension) and what the blur follows, so a pull runs the same
+            // way towards the camera and away from it. In meters, a pull
+            // outwards would cover nearly all of its blur in the first frames.
             const k = transition <= 0 ? 1 : 1 - Math.exp(-3 * dt / transition);
-            focus.current += (target.current - focus.current) * k;
+            const inv = 1 / focus.current + (1 / target.current - 1 / focus.current) * k;
+            focus.current = 1 / inv;
         }
         if (label.current) label.current.textContent = `${focus.current.toFixed(2)} m`;
         // follows the frame when the window or the sensor changes
