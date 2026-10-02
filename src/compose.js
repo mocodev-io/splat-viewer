@@ -303,37 +303,40 @@ export const composePS = /* glsl */ `
         svDofBlur = centerSize;
         float maxR = sv_dofMaxRadius;
 
+        // Each pixel turns its sample patterns by its own angle, so the
+        // pattern shows up as fine noise instead of fixed directions.
+        float spin = svHash(gl_FragCoord.xy + sv_dofSeed) * 6.2831853;
+
         // How far to gather: this pixel's own blur, or further when a nearer,
         // more blurred neighbour is big enough to spill over it. A handful of
-        // depth probes finds those. Sharp pixels with nothing blurred in front
-        // of them skip the gather entirely, which is most of the frame.
+        // depth probes finds those; how much they widen the reach fades in
+        // with how well their blur reaches this pixel, so spill edges move
+        // smoothly when the focus changes. Sharp pixels with nothing blurred
+        // in front of them skip the gather, which is most of the frame.
         float reach = centerSize;
         for (int i = 0; i < 32; i++) {
             if (float(i) >= sv_dofProbes) break;
             float r = maxR * sqrt((float(i) + 0.5) / sv_dofProbes);
-            float a = float(i) * 2.39996323 + 0.7;
+            float a = spin + float(i) * 2.39996323;
             float d = svDepth(uv + vec2(cos(a), sin(a)) * r * sceneTextureInvRes);
             if (d < centerDepth) {
                 float size = svCoc(d);
-                if (size >= r * 0.75) reach = max(reach, size);
+                reach = max(reach, mix(reach, size, smoothstep(r * 0.5, r, size)));
             }
         }
-        if (reach < 0.75) return base;
+        if (reach < 0.25) return base;
         reach = min(reach, maxR);
 
         // Samples spread evenly over the disc of that reach, so small blurs get
-        // as many samples as big ones. Each pixel turns the spiral by its own
-        // angle, which turns the sample pattern into fine noise; colour is read
-        // between texels (a free 2x2 average) so tiny highlights are not missed.
+        // as many samples as big ones.
         vec3 color = base;
         float total = 1.0;
-        float angle = svHash(gl_FragCoord.xy + sv_dofSeed) * 6.2831853;
-        vec2 between = 0.5 * sceneTextureInvRes;
+        float angle = spin;
         for (int i = 0; i < 256; i++) {
             if (float(i) >= sv_dofSamples) break;
             float radius = reach * sqrt((float(i) + 0.5) / sv_dofSamples);
             vec2 tc = uv + svBokehOffset(angle, radius, uv) * sceneTextureInvRes;
-            vec3 sampleColor = svSampleCA(tc + between);
+            vec3 sampleColor = svSampleCA(tc);
             float sampleDepth = svDepth(tc);
             float sampleSize = svCoc(sampleDepth);
             if (sampleDepth > centerDepth) sampleSize = min(sampleSize, centerSize * 2.0);
@@ -342,7 +345,8 @@ export const composePS = /* glsl */ `
             total += 1.0;
             angle += 2.39996323;
         }
-        return color / total;
+        // fade in over the first pixel of blur instead of switching on
+        return mix(base, color / total, smoothstep(0.25, 1.25, reach));
     }
 
     vec3 svScene(vec2 uv, vec3 base) {

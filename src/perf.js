@@ -71,6 +71,7 @@ export class Performance {
         this.frames = 0;
         this.time = 0;
         this.steadyChecks = 0;
+        this.slowChecks = 0;
         this.holdUp = 0;               // seconds before auto may scale up again
         this.appliedRatio = 0;
         this.splatParams = {};
@@ -101,15 +102,20 @@ export class Performance {
         this.applySplatQuality();
     }
 
-    // Down quickly when too slow, up carefully when there is headroom.
+    // Down when it stays too slow, up carefully when there is headroom. A
+    // single slow second (a focus pull, a big load) does not count: every
+    // change is a visible jump in sharpness.
     adjust(fps) {
         const p = this.settings.performance;
         const target = p.targetFps;
         let scale = p.scale;
         if (fps < target * 0.9) {
-            scale *= Math.min(Math.max(fps / target, 0.7), 0.95);
             this.steadyChecks = 0;
             this.holdUp = 4;
+            if (++this.slowChecks >= 2) {
+                scale *= Math.min(Math.max(fps / target, 0.7), 0.95);
+                this.slowChecks = 0;
+            }
         } else if (fps >= target * 0.97 && scale < 1 && this.holdUp <= 0) {
             if (++this.steadyChecks >= 3) {
                 scale *= 1.1;
@@ -118,6 +124,7 @@ export class Performance {
         } else {
             this.steadyChecks = 0;
         }
+        if (fps >= target * 0.9) this.slowChecks = 0;
         scale = Math.round(Math.min(Math.max(scale, MIN_SCALE), 1) * 20) / 20;
         if (scale !== p.scale) {
             p.scale = scale;
