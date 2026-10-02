@@ -186,7 +186,20 @@ export const defaultLens = (): Lens => ({
 const toDeg = (r: number) => r * 180 / Math.PI;
 const toRad = (d: number) => d * Math.PI / 180;
 
-/** Horizontal angle of view, degrees. */
+/**
+ * The image frame: the sensor's aspect, as large as fits in a canvas of
+ * width × height and centred in it. What lies outside is overscan, shown
+ * dimmed or black by the passepartout.
+ */
+export function frameRect(width: number, height: number, aspect: number) {
+    const w = Math.min(width, height * aspect);
+    const h = w / aspect;
+    return { x: (width - w) / 2, y: (height - h) / 2, w, h };
+}
+
+export const sensorAspect = (l: Pick<Lens, 'sensorWidth' | 'sensorHeight'>) => l.sensorWidth / l.sensorHeight;
+
+/** Horizontal angle of view of the frame, degrees. */
 export const horizontalFov = (l: Lens) => toDeg(2 * Math.atan(l.sensorWidth / (2 * l.focalLength)));
 /** Vertical angle of view over the sensor's own height, degrees; what the v2 `fov` field gets. */
 export const verticalFov = (l: Lens) => toDeg(2 * Math.atan(l.sensorHeight / (2 * l.focalLength)));
@@ -244,6 +257,53 @@ export function sceneGrain(s: ExperienceSettings): Grain {
         grain[key] = clamp(grain[key], grainRanges[key]);
     }
     return grain;
+}
+
+// ---- our extras: the film and the lens vignette
+//
+// The image goes through the lens (aberration, vignette) and then onto the
+// film: colour, or black and white, which records only brightness (a later
+// film emulation would hang its own sensitivity per colour here). Stored as
+// `extras.look.film`.
+
+export const FILM_TYPES = ['color', 'bw'] as const;
+export type FilmType = typeof FILM_TYPES[number];
+
+export function sceneFilm(s: ExperienceSettings): FilmType {
+    const look = s.extras?.look;
+    const film = isObject(look) ? look.film : undefined;
+    return FILM_TYPES.includes(film as FilmType) ? film as FilmType : 'color';
+}
+
+// The vignette: SuperSplat's `vignette` keeps the amount and where the
+// falloff runs (inner / outer); our additions in `extras.look.vignette`:
+// `roundness` (1 a circle around the optical axis, as a real lens; 0 the
+// frame's own shape) and `physical`, the falloff of the lens itself from
+// its focal length and f-stop.
+export type LensVignette = { physical: boolean; roundness: number };
+
+export const defaultLensVignette = (): LensVignette => ({ physical: false, roundness: 1 });
+
+export function sceneLensVignette(s: ExperienceSettings): LensVignette {
+    const look = s.extras?.look;
+    const v = mergeKnown(defaultLensVignette(), isObject(look) ? look.vignette : undefined);
+    v.roundness = clamp(v.roundness, { min: 0, max: 1 });
+    return v;
+}
+
+// ---- our extras: the viewport
+//
+// Outside the frame the view goes on with the same lens (overscan); the
+// passepartout dims it, 1 is black bars. Stored as `extras.viewport`.
+
+export type Viewport = { passepartout: number };
+
+export const defaultViewport = (): Viewport => ({ passepartout: 1 });
+
+export function sceneViewport(s: ExperienceSettings): Viewport {
+    const v = mergeKnown(defaultViewport(), s.extras?.viewport);
+    v.passepartout = clamp(v.passepartout, { min: 0, max: 1 });
+    return v;
 }
 
 // Authoring ranges from supersplat-viewer/src/schemas/ranges.ts

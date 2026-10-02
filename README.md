@@ -44,9 +44,18 @@ other extras). Put it next to the splat.
 The camera is a physical one: sensor, focal length, f-stop and focus
 distance, no separate field of view.
 
-- **Sensor**: Full frame, Super 35, APS-C, Micro 4/3 or Custom. The sensor
-  width spans the image width (like Blender's default), so the angle of view
-  is `2·atan(sensor width / 2·focal length)`.
+- **Sensor**: Full frame, Super 35, APS-C, Micro 4/3 or Custom. The image
+  is a *frame* with the sensor's aspect (3:2 for full frame and APS-C, about
+  4:3 for Super 35 and Micro 4/3; Custom 36 × 15 gives 2.39:1), as large as
+  fits in the window. The sensor width spans the frame width and its height
+  the frame height, so the angle of view is `2·atan(sensor width / 2·focal
+  length)` across and the same with the height up and down; resizing the
+  window never changes what is in the frame.
+- **Passepartout** (0–1): around the frame the view goes on with the same
+  lens (overscan), as in a camera view in Blender (Maya calls it the film
+  gate with overscan). 1 shows black bars, lower dims the overscan less, 0
+  shows it fully. Vignette, aberration and grain are measured from the
+  frame, and the AF point stays inside it. Saved as `extras.viewport`.
 - **Focus**: *manual* or *auto*, as on a camera.
   - *Manual*: **Focus m** (0.1–50 m) is the focus ring.
   - *Auto* (continuous AF, with DoF on): the camera keeps focusing on what
@@ -55,7 +64,8 @@ distance, no separate field of view.
     It measures only when the camera, the AF point or the scene changed,
     at most four times a second, and moves the focus to each new distance
     in **AF transition s** (0 is instant, longer is a slow focus pull).
-    Switching back to manual keeps the distance it reached. **AF frame**
+    Switching back to manual keeps the distance it reached. A click outside
+    the frame puts the AF point on its nearest edge. **AF frame**
     hides the frame for a clean image; focusing goes on.
   - The distance is the depth of the splat or object under the point (the
     engine's picker) along the view direction, as a real focus plane is.
@@ -133,11 +143,12 @@ The lens is saved under `extras.lens`, with the still settings
 file; a file without a lens, from SuperSplat say, gets the focal length
 that matches its `fov`.
 
-### Chromatic aberration and film grain
+### Lens and film: aberration, vignette, film type, grain
 
-Both finish the image the way a camera does after its lens, on the final
-image: after depth of field, bloom and tone mapping, and the same while the
-camera moves, while a still builds up and once it is done.
+These finish the image the way a camera does: first the lens, then the
+film. They work on the final image (after depth of field, bloom and tone
+mapping), the same while the camera moves, while a still builds up and once
+it is done, and are measured from the frame.
 
 - **Chromatic aberration** (Look): the lens images each colour at a
   slightly different scale, so colours separate towards the edges. The
@@ -148,23 +159,49 @@ camera moves, while a still builds up and once it is done.
   land where SuperSplat's fringing puts them in the corner), so the file
   stays compatible; the engine's own fringing is not used, as it took red
   and blue from the unblurred image.
-- **Film grain** (Look, off by default): random grains, strongest in the
+- **Vignette** (Look), light lost in the lens: the image is darkened in
+  linear light, so highlights stay bright instead of turning grey (the
+  engine's vignette, which mixes towards black after tone mapping and is
+  stretched to the window, is not used).
+  - By hand, as in Lightroom: **Amount**, **Midpoint** (where the falloff is
+    halfway, 1 is the frame corner), **Feather** (how wide it runs) and
+    **Roundness**: 1 a circle around the optical axis in sensor
+    millimetres, as a real lens (on 3:2 the long sides darken more than top
+    and bottom), 0 the frame's own shape.
+  - **Physical**: the lens itself. The natural cos⁴ falloff of the angle to
+    each point (wide lenses lose more light towards the corners), times the
+    optical vignetting of a lens wide open (about 1.5 stops in the corner at
+    f/1.4, gone by f/5.6). Measured in the corner: 24 mm f/1.4 −3.1 stops,
+    24 mm f/8 −1.7, 85 mm f/1.4 −1.6, 85 mm f/8 −0.2. The plain cos⁴ law is
+    a simple lens; modern wide angles lose less stopped down, so an
+    **Amount** around 0.6 suits those (1 is the lens as computed).
+  - Stored as SuperSplat's `vignette` (amount, inner and outer for midpoint
+    and feather) plus `extras.look.vignette` (`physical`, `roundness`).
+- **Film → Type**: Color or Black & white. Black and white film records
+  brightness only (Rec. 709 weights in linear light), after the lens: its
+  chromatic aberration shows as a soft smear without colour, and its grain
+  has no colour. Grading stays a separate colour correction before it.
+  Saved as `extras.look.film` (`"color"` or `"bw"`).
+- **Film → Grain** (off by default): random grains, strongest in the
   mid-tones as on film. **Intensity**, **Size** (pixels; even large grain
   stays irregular, never blocky), **Color** (0 monochrome, 1 a separate
-  grain per colour channel) and **Animation**: 1 is film speed, a new
+  grain per colour channel, colour film only) and **Animation**: 1 is film speed, a new
   pattern 24 times a second (faster reads as video noise), lower is slower,
   0 a fixed pattern. The grain is never averaged into a still, and it keeps
   moving once the still is done or the viewer idles: only the last drawing
   step is repeated then, without rendering the scene (the HUD stays `idle`).
 
-Changing either shows on the next frame without starting a still over.
-SuperSplat has no grain, so it is saved under `extras.look`:
+Changing any of these, or the passepartout, shows on the next frame
+without starting a still over. Our additions under `extras`:
 
 ```json
 "extras": {
   "look": {
-    "grain": { "enabled": true, "intensity": 0.3, "size": 1, "color": 0.2, "animation": 1 }
-  }
+    "film": "color",
+    "grain": { "enabled": true, "intensity": 0.3, "size": 1, "color": 0.2, "animation": 1 },
+    "vignette": { "physical": false, "roundness": 1 }
+  },
+  "viewport": { "passepartout": 1 }
 }
 ```
 
@@ -243,7 +280,7 @@ src/
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
   viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
   viewer/stillFrames.ts    HDR accumulation for the still DoF (inside CameraFrame), presenting
-                           with chromatic aberration and film grain
+                           with aberration, vignette, film type, grain and passepartout
   viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
   viewer/aperture.ts       aperture shapes (blades, anamorphic) and evenly spread lens points
   viewer/AutoFocus.tsx     continuous autofocus and the AF point

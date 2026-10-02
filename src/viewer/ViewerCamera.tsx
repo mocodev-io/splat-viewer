@@ -5,16 +5,28 @@ import { Camera, Script } from '@playcanvas/react/components';
 import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import { horizontalFov, type CameraPose, type Grain, type Lens, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
+import {
+    horizontalFov, type CameraPose, type FilmType, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    type Tonemapping, type Vec3Tuple
+} from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
 import { updateLensDof, type DepthView } from './lensDof';
 import { useStillDof } from './useStillDof';
-import type { Finish } from './stillFrames';
+import type { Finish, FinishVignette } from './stillFrames';
 
 export type ViewRequest = { pose: CameraPose; id: number };
 
 // what of the fringing reaches the image: its intensity when on
 const fringingAmount = (pe: PostEffectSettings) => (pe.fringing.enabled ? pe.fringing.intensity : 0);
+
+// SuperSplat's inner / outer run up to the corner at √2 (curvature 1); the
+// finishing step measures 1 at the corner
+const vignetteFor = (pe: PostEffectSettings, lv: LensVignette, lens: Lens): FinishVignette => {
+    const v = pe.vignette;
+    if (!v.enabled) return { mode: 'off' };
+    if (lv.physical) return { mode: 'physical', amount: v.intensity, fStop: lens.fStop };
+    return { mode: 'hand', amount: v.intensity, start: v.inner / Math.SQRT2, end: v.outer / Math.SQRT2, roundness: lv.roundness };
+};
 
 // the lens as far as it changes the accumulated still (the AF frame does not)
 const stillLens = ({ afFrame: _, ...rest }: Lens) => rest;
@@ -45,6 +57,9 @@ type ViewerCameraProps = {
     highPrecision: boolean;
     postEffects: PostEffectSettings;
     grain: Grain;
+    film: FilmType;
+    lensVignette: LensVignette;
+    passepartout: number;
     background: Vec3Tuple;
     sceneKey: string;                     // changes whenever the scene content changes
     busy: boolean;                        // a splat is loading
@@ -54,7 +69,7 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, background, sceneKey, busy, progress }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, film, lensVignette, passepartout, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
@@ -147,11 +162,10 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         cf.grading.saturation = pe.grading.saturation;
         cf.grading.tint = new Color(...pe.grading.tint);
 
-        cf.vignette.enabled = pe.vignette.enabled;
-        cf.vignette.intensity = pe.vignette.intensity;
-        cf.vignette.inner = pe.vignette.inner;
-        cf.vignette.outer = pe.vignette.outer;
-        cf.vignette.curvature = pe.vignette.curvature;
+        // the vignette is drawn as light lost in the lens, on the final image
+        // measured from the frame (stillFrames.ts); the engine's mixes towards
+        // black after tone mapping and is stretched to the canvas
+        cf.vignette.enabled = false;
 
         // the fringing is drawn as chromatic aberration on the final image
         // (stillFrames.ts): the engine's comes after its DoF but takes red and
@@ -159,15 +173,21 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         cf.fringing.enabled = false;
     }, [tonemapping, highPrecision, postEffects, lens.dof]);
 
-    // Aberration and grain finish the image on its way to the canvas
+    // Aberration, vignette, film and grain finish the image on its way to the canvas
     // (stillFrames.ts), after everything the still accumulates: a change
     // shows on the next frame and does not start the still over.
-    const fringing = fringingAmount(postEffects);
-    const { enabled, intensity, size, color, animation } = grain;
-    const finish: Finish = useMemo(
-        () => ({ fringing, grain: { enabled, intensity, size, color, animation } }),
-        [fringing, enabled, intensity, size, color, animation]
-    );
+    // Everything here is plain data; the JSON key keeps `finish` the same
+    // object until a value changes.
+    const finishKey = JSON.stringify({
+        fringing: fringingAmount(postEffects),
+        grain,
+        film,
+        vignette: vignetteFor(postEffects, lensVignette, lens),
+        sensor: [lens.sensorWidth, lens.sensorHeight],
+        focalLength: lens.focalLength,
+        passepartout
+    } satisfies Finish);
+    const finish = useMemo(() => JSON.parse(finishKey) as Finish, [finishKey]);
     useEffect(() => {
         app.renderNextFrame = true;
     }, [app, finish]);
@@ -194,7 +214,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         app, controls, frame, lens, focus, progress, busy,
         accumulate: lens.dof && debugView === 'image',
         depthRange: depthView > 0,
-        sceneKey: JSON.stringify([sceneKey, stillLens(lens), tonemapping, highPrecision, { ...postEffects, fringing: null },
+        sceneKey: JSON.stringify([sceneKey, stillLens(lens), tonemapping, highPrecision, { ...postEffects, fringing: null, vignette: null },
             background, debugView, depthRange, farClip]),
         finish
     });

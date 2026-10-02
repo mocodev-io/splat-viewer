@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
-    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, FOCUS_MODES, grainRanges, lensRanges, ranges, sceneGrain,
-    SENSOR_NAMES, SENSORS, TONEMAPPING,
-    type ExperienceSettings, type Grain, type Lens, type PostEffectSettings, type SensorName, type Tonemapping, type Vec3Tuple
+    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, defaultLensVignette, defaultViewport, FILM_TYPES, FOCUS_MODES,
+    grainRanges, lensRanges, ranges, sceneFilm, sceneGrain, sceneLensVignette, SENSOR_NAMES, SENSORS, TONEMAPPING,
+    type ExperienceSettings, type FilmType, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    type SensorName, type Tonemapping, type Vec3Tuple, type Viewport
 } from '../scene/experience';
 import { ORIENTATIONS, type Orientation } from '../viewer/Splat';
 
@@ -43,6 +44,23 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
     return { orientation: values.orientation as Orientation, set };
 }
 
+const filmOptions = Object.fromEntries(FILM_TYPES.map(t => [t === 'bw' ? 'Black & white' : 'Color', t]));
+
+// The vignette falloff runs from `start` to `end`, 1 being the frame corner.
+// The panel shows it as Lightroom does, a midpoint and a feather (its
+// width); stored as SuperSplat's inner / outer, which put the corner at √2.
+const fromMidpoint = (midpoint: number, feather: number) => {
+    const clampSS = (x: number) => Math.min(Math.max(x, ranges.vignette.inner.min), ranges.vignette.inner.max);
+    return {
+        inner: clampSS((midpoint - feather / 2) * Math.SQRT2),
+        outer: clampSS((midpoint + feather / 2) * Math.SQRT2)
+    };
+};
+const toMidpoint = (inner: number, outer: number) => ({
+    midpoint: Math.min(Math.max((inner + outer) / 2 / Math.SQRT2, 0), 1),
+    feather: Math.min(Math.max(Math.abs(outer - inner) / Math.SQRT2, 0), 1)
+});
+
 const bladeOptions = Object.fromEntries(BLADE_COUNTS.map(n => [n ? `${n} blades` : 'Round', n]));
 
 type LensPanelProps = {
@@ -65,6 +83,9 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         sensor: { value: d.sensor, options: SENSOR_NAMES, label: 'Sensor' },
         sensorWidth: { value: d.sensorWidth, ...r.sensorWidth, label: 'Width mm', render: custom },
         sensorHeight: { value: d.sensorHeight, ...r.sensorHeight, label: 'Height mm', render: custom },
+        // the frame has the sensor's aspect; around it the same lens goes on
+        // (overscan), dimmed by the passepartout, black at 1
+        passepartout: { value: defaultViewport().passepartout, min: 0, max: 1, step: 0.01, label: 'Passepartout' },
         focalLength: { value: d.focalLength, ...r.focalLength, label: 'Focal length mm' },
         fStop: { value: d.fStop, ...r.fStop, label: 'f-stop' },
         focusMode: { value: d.focusMode, options: [...FOCUS_MODES], label: 'Focus' },
@@ -119,16 +140,22 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         afFrame: v.afFrame
     };
 
+    const viewport: Viewport = { passepartout: v.passepartout };
+
     // puts a loaded or computed lens into the panel
     const apply = (l: Partial<Lens>) => set(l);
+    const applyViewport = (vp: Viewport) => set({ passepartout: vp.passepartout });
 
-    return { lens, apply };
+    return { lens, apply, viewport, applyViewport };
 }
 
 // Everything the scene settings file can hold about the look of the image.
 export function useLookPanel() {
     const pe = ranges;
     const g = defaultGrain();
+    const lv = defaultLensVignette();
+    const mid = toMidpoint(0.3, 0.75);
+    const byHand = (get: (path: string) => unknown) => !get('Look.Vignette.vignettePhysical');
     const [v, set] = useControls('Look', () => ({
         tonemapping: { value: 'linear' as Tonemapping, options: [...TONEMAPPING], label: 'Tone mapping' },
         highPrecision: { value: false, label: 'High precision' },
@@ -149,12 +176,17 @@ export function useLookPanel() {
             saturation: { value: 1, ...pe.grading.saturation, label: 'Saturation' },
             tint: { value: '#ffffff', label: 'Tint' }
         }, { collapsed: true }),
+        // light lost in the lens (stillFrames.ts): by hand, as in Lightroom,
+        // or physical, from the focal length and f-stop of the lens
         Vignette: folder({
             vignette: { value: false, label: 'On' },
-            vignetteIntensity: { value: 0.5, ...pe.vignette.intensity, label: 'Intensity' },
-            vignetteInner: { value: 0.3, ...pe.vignette.inner, label: 'Inner' },
-            vignetteOuter: { value: 0.75, ...pe.vignette.outer, label: 'Outer' },
-            vignetteCurvature: { value: 1, ...pe.vignette.curvature, label: 'Curvature' }
+            vignettePhysical: { value: lv.physical, label: 'Physical' },
+            vignetteIntensity: { value: 0.5, ...pe.vignette.intensity, label: 'Amount' },
+            vignetteMidpoint: { value: mid.midpoint, min: 0, max: 1, step: 0.01, label: 'Midpoint', render: byHand },
+            vignetteFeather: { value: mid.feather, min: 0, max: 1, step: 0.01, label: 'Feather', render: byHand },
+            vignetteRoundness: { value: lv.roundness, min: 0, max: 1, step: 0.01, label: 'Roundness', render: byHand },
+            // SuperSplat's curvature, not used here; kept so saving does not change it
+            vignetteCurvature: { value: 1, ...pe.vignette.curvature, render: () => false }
         }, { collapsed: true }),
         // stored as SuperSplat's `fringing`; drawn as lateral chromatic
         // aberration on the final image (stillFrames.ts)
@@ -162,11 +194,13 @@ export function useLookPanel() {
             fringing: { value: false, label: 'On' },
             fringingIntensity: { value: 0.5, ...pe.fringing.intensity, label: 'Intensity' }
         }, { collapsed: true }),
-        'Film grain': folder({
-            grain: { value: g.enabled, label: 'On' },
+        // what the film records (colour, or brightness only) and its grain
+        Film: folder({
+            film: { value: 'color' as FilmType, options: filmOptions, label: 'Type' },
+            grain: { value: g.enabled, label: 'Grain' },
             grainIntensity: { value: g.intensity, ...grainRanges.intensity, label: 'Intensity' },
             grainSize: { value: g.size, ...grainRanges.size, label: 'Size' },
-            grainColor: { value: g.color, ...grainRanges.color, label: 'Color' },
+            grainColor: { value: g.color, ...grainRanges.color, label: 'Color', render: get => get('Look.Film.film') !== 'bw' },
             grainAnimation: { value: g.animation, ...grainRanges.animation, label: 'Animation' }
         }, { collapsed: true })
     }));
@@ -179,11 +213,13 @@ export function useLookPanel() {
             saturation: v.saturation, tint: fromHex(v.tint)
         },
         vignette: {
-            enabled: v.vignette, intensity: v.vignetteIntensity, inner: v.vignetteInner,
-            outer: v.vignetteOuter, curvature: v.vignetteCurvature
+            enabled: v.vignette, intensity: v.vignetteIntensity, ...fromMidpoint(v.vignetteMidpoint, v.vignetteFeather),
+            curvature: v.vignetteCurvature
         },
         fringing: { enabled: v.fringing, intensity: v.fringingIntensity }
     };
+    const film = v.film as FilmType;
+    const lensVignette: LensVignette = { physical: v.vignettePhysical, roundness: v.vignetteRoundness };
     const grain: Grain = {
         enabled: v.grain, intensity: v.grainIntensity, size: v.grainSize, color: v.grainColor, animation: v.grainAnimation
     };
@@ -192,6 +228,8 @@ export function useLookPanel() {
     const apply = (s: ExperienceSettings) => {
         const p = s.postEffectSettings;
         const gr = sceneGrain(s);
+        const sv = sceneLensVignette(s);
+        const m = toMidpoint(p.vignette.inner, p.vignette.outer);
         set({
             tonemapping: s.tonemapping,
             highPrecision: s.highPrecisionRendering,
@@ -207,12 +245,15 @@ export function useLookPanel() {
             saturation: p.grading.saturation,
             tint: toHex(p.grading.tint),
             vignette: p.vignette.enabled,
+            vignettePhysical: sv.physical,
             vignetteIntensity: p.vignette.intensity,
-            vignetteInner: p.vignette.inner,
-            vignetteOuter: p.vignette.outer,
+            vignetteMidpoint: m.midpoint,
+            vignetteFeather: m.feather,
+            vignetteRoundness: sv.roundness,
             vignetteCurvature: p.vignette.curvature,
             fringing: p.fringing.enabled,
             fringingIntensity: p.fringing.intensity,
+            film: sceneFilm(s),
             grain: gr.enabled,
             grainIntensity: gr.intensity,
             grainSize: gr.size,
@@ -227,6 +268,8 @@ export function useLookPanel() {
         background: fromHex(v.background),
         postEffects,
         grain,
+        film,
+        lensVignette,
         apply
     };
 }

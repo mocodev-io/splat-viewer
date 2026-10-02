@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3, type AppBase, type Texture } from 'playcanvas';
 import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import type { Lens } from '../scene/experience';
+import { frameRect, sensorAspect, type Lens } from '../scene/experience';
 import { StillFrames, type Finish } from './stillFrames';
 import { Aperture, APERTURE_GROUP } from './aperture';
 
@@ -105,8 +105,17 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
             const j = state.current.jitter;
             if (j) m.mul(offset.setTranslate(j.x, j.y, 0));
         };
+        // The camera's angle of view belongs to the frame (the sensor's
+        // aspect, fitted into the canvas); the projection widens it over the
+        // whole canvas so the frame keeps exactly its own angle and the rest
+        // is overscan with the same lens, as a camera view with a
+        // passepartout in Blender.
         camera.calculateProjection = (m: Mat4) => {
-            m.setPerspective(camera.fov, sf.frame.width / Math.max(sf.frame.height, 1), camera.nearClip, camera.farClip, camera.horizontalFov);
+            const w = sf.frame.width;
+            const h = Math.max(sf.frame.height, 1);
+            const frameW = frameRect(w, h, sensorAspect(live.current.lens)).w;
+            const fov = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * w / frameW) * 180 / Math.PI;
+            m.setPerspective(fov, w / h, camera.nearClip, camera.farClip, true);
             const j = state.current.jitter;
             if (j) {
                 // clip.x += (P00 · dx / S) · clip.w, and the same for y
@@ -142,7 +151,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         // How far the image moves between two poses, in pixels: the turn
         // through the focal length in pixels, and the shift as seen at half
         // the focus distance (nearer things move more, far less).
-        const focalPx = (camera.horizontalFov ? width : height) / (2 * Math.tan(camera.fov * Math.PI / 360));
+        const focalPx = frameRect(width, height, sensorAspect(lens)).w / (2 * Math.tan(camera.fov * Math.PI / 360));
         const reach = Math.max(focus.current / lens.metersPerUnit * 0.5, camera.nearClip);
         const current: Pose = { p: cc.entity.getPosition(), r: cc.entity.getRotation() };
         const movedPx = (a: Pose, b: Pose) => {

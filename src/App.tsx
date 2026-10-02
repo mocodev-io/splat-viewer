@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FILLMODE_FILL_WINDOW, RESOLUTION_AUTO, type BoundingBox } from 'playcanvas';
 import { Application } from '@playcanvas/react';
 import {
-    defaultExperience, lensRanges, loadExperience, sceneLens, sceneLighting, sceneObjects, settingsUrlFor, verticalFov,
+    defaultExperience, lensRanges, sensorAspect, loadExperience, sceneLens, sceneLighting, sceneObjects, sceneViewport,
+    settingsUrlFor, verticalFov,
     type CameraPose, type ExperienceSettings, type SceneObject, type Vec3Tuple
 } from './scene/experience';
 import { findSplats, splatUrl } from './scene/splats';
@@ -156,6 +157,7 @@ export function App() {
         live.current.look.apply(result.settings);
         const sceneLensSettings = sceneLens(result.settings);
         live.current.lensPanel.apply(sceneLensSettings);
+        live.current.lensPanel.applyViewport(sceneViewport(result.settings));
         focus.current = sceneLensSettings.focusDistance;
         setExperience(result.settings);
         setFraming(null);
@@ -186,7 +188,7 @@ export function App() {
             setStatus('load a splat first');
             return;
         }
-        const { look, lensPanel: { lens }, experience } = live.current;
+        const { look, lensPanel: { lens, viewport }, experience } = live.current;
         // `fov` stays filled for SuperSplat; the lens is the real source
         const pose: CameraPose = { position: v.position, target: v.target, fov: verticalFov(lens) };
         const out: ExperienceSettings = {
@@ -199,7 +201,13 @@ export function App() {
             extras: {
                 ...experience.extras,
                 lens: { ...lens, focusDistance: focus.current },
-                look: { ...lookExtras(experience), grain: look.grain }
+                look: {
+                    ...lookExtras(experience),
+                    grain: look.grain,
+                    film: look.film,
+                    vignette: look.lensVignette
+                },
+                viewport
             }
         };
         download(settingsUrlFor(splatUrl(name)).split('/').pop()!, out);
@@ -263,6 +271,9 @@ export function App() {
                     highPrecision={look.highPrecision}
                     postEffects={look.postEffects}
                     grain={look.grain}
+                    film={look.film}
+                    lensVignette={look.lensVignette}
+                    passepartout={lensPanel.viewport.passepartout}
                     background={look.background}
                     sceneKey={sceneKey}
                     busy={!!loaded && !framing}
@@ -288,6 +299,7 @@ export function App() {
                 <AutoFocus
                     active={!!loaded && lens.dof && lens.focusMode === 'auto'}
                     showFrame={lens.afFrame}
+                    frameAspect={sensorAspect(lens)}
                     point={afPoint}
                     transition={lens.afTransition}
                     metersPerUnit={lens.metersPerUnit}

@@ -18,7 +18,7 @@
 
 import { SHADERLANGUAGE_GLSL, ShaderChunks, type AppBase, type Texture } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import type { Lens } from '../scene/experience';
+import { frameRect, sensorAspect, type Lens } from '../scene/experience';
 
 const composeDofGLSL = /* glsl */ `
     #ifdef DOF
@@ -306,18 +306,20 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const f = lens.focalLength / 1000;                     // m
     const S = Math.max(focus, f * 1.01);                   // m, beyond the lens
     const cInf = (f * f) / (lens.fStop * (S - f));         // blur diameter at infinity on the sensor, m
-    const radiusPx = (cInf / 2) / (lens.sensorWidth / 1000) * device.width;   // sensor width = image width
+    // the frame (the sensor's aspect) inside the canvas; outside it is overscan
+    const frame = frameRect(device.width, device.height, sensorAspect(lens));
+    const radiusPx = (cInf / 2) / (lens.sensorWidth / 1000) * frame.w;   // sensor width = frame width
 
     // the splat scene depth is stored as 1 / depth; a depth prepass stores it linear
     const camera = cf.entity.camera!;
     const reciprocal = (camera as unknown as { shaderParams: { sceneDepthMapReciprocal: boolean } }).shaderParams.sceneDepthMapReciprocal;
     const scope = device.scope;
     // the soft rim of splat edges, roughly a percent of the image height
-    const edgeBand = 0.01 * device.height;
+    const edgeBand = 0.01 * frame.h;
     const maxBlur = still ? OVERBLUR_MAX : q.maxBlur;
-    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, maxBlur * device.height, edgeBand]);
+    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, maxBlur * frame.h, edgeBand]);
     scope.resolve('lens_quality').setValue([q.samples, q.probes, reciprocal ? 2 : 1, camera.farClip]);
     scope.resolve('lens_view').setValue(view);
-    scope.resolve('lens_extra').setValue([still ? 1 : 0, BLUR_VIEW_WHITE * device.height, range.ready ? 1 : 0, 0]);
+    scope.resolve('lens_extra').setValue([still ? 1 : 0, BLUR_VIEW_WHITE * frame.h, range.ready ? 1 : 0, 0]);
     scope.resolve('lens_rangeMap').setValue(range.texture);
 }

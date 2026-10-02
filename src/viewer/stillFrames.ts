@@ -58,7 +58,7 @@
 // stops rendering, only this last step is repeated (`refresh`).
 
 import { APERTURE_GROUP } from './aperture';
-import type { Grain } from '../scene/experience';
+import { frameRect, type FilmType, type Grain } from '../scene/experience';
 import {
     ADDRESS_CLAMP_TO_EDGE, BLENDEQUATION_ADD, BLENDMODE_ONE, BlendState, FILTER_LINEAR, FILTER_NEAREST,
     FramePass, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, PIXELFORMAT_RGBA8, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
@@ -181,24 +181,46 @@ const presentGLSL = /* glsl */ `
     }
 `;
 
-// The image as it goes to the canvas, finished like a camera's.
+// The image as it goes to the canvas, finished like a camera's: first the
+// lens (chromatic aberration, vignette), then the film (colour or black and
+// white, grain), then the passepartout over the overscan.
+//
+// The frame is the sensor's aspect fitted into the canvas (`still_frame`, in
+// pixels); everything is measured from it, the overscan around it is the
+// same lens going on.
 //
 // Lateral chromatic aberration: the lens images each wavelength at a
 // slightly different scale, so colours separate towards the edges. The image
 // is sampled at a few scales around the centre and each sample counts for
 // the colours of its wavelength (red outermost, then green, blue innermost):
 // a soft spectral smear rather than a hard red and blue edge. Its strength
-// grows with the distance from the centre.
+// grows with the distance from the centre. On black and white film it is
+// recorded as brightness only: a soft smear without colour.
+//
+// Vignette, as light lost in the lens: the image is darkened in linear
+// light, so highlights stay bright rather than turning grey. Either set by
+// hand (amount, where the falloff starts and ends, roundness: 1 a circle
+// around the optical axis in sensor millimetres, as a real lens, 0 the
+// frame's own shape), or physical: the natural cos⁴ falloff of the angle to
+// each point (wide lenses lose more), times the optical vignetting of a lens
+// wide open, which is gone a few stops down.
+//
+// Black and white film records brightness only (Rec. 709 weights, in linear
+// light); a film emulation would weigh the colours by its own sensitivity.
 //
 // Film grain: random grains (a Gaussian dot each, at a random place in each
 // cell of a `size` pixel grid), so even large grains stay irregular instead
 // of blocky. Strongest in the mid-tones, as on film; per colour channel by
-// `color`. The pattern is chosen by `still_seed`.
+// `color` (none on black and white). The pattern is chosen by `still_seed`.
 const finishGLSL = /* glsl */ `
     varying vec2 uv0;
     uniform sampler2D still_image;
     uniform vec4 still_finish;    // aberration scale at the edge, grain intensity, grain size (pixels), grain colour
     uniform float still_seed;
+    uniform vec4 still_frame;     // the frame in pixels: x0, y0, x1, y1
+    uniform vec4 still_optics;    // sensor width, height, focal length (mm), black and white (1)
+    uniform vec4 still_vignette;  // mode (0 off, 1 by hand, 2 physical), amount, start, end
+    uniform vec4 still_vignette2; // roundness, optical vignetting at the corner (stops), passepartout, -
 
     highp uvec3 pcg3d(highp uvec3 v) {
         v = v * 1664525u + 1013904223u;
@@ -213,6 +235,7 @@ const finishGLSL = /* glsl */ `
     }
 
     void main() {
+        // the lens: chromatic aberration
         vec3 c;
         float k = still_finish.x;
         if (k > 0.0) {
@@ -230,6 +253,34 @@ const finishGLSL = /* glsl */ `
             c = texture2D(still_image, uv0).rgb;
         }
 
+        // where this pixel lies: -1..1 over the frame, and on the sensor (mm)
+        vec2 frameCentre = (still_frame.xy + still_frame.zw) * 0.5;
+        vec2 frameHalf = (still_frame.zw - still_frame.xy) * 0.5;
+        vec2 q = (gl_FragCoord.xy - frameCentre) / frameHalf;
+        vec2 mm = q * 0.5 * still_optics.xy;
+        float rCircle = length(mm) / (0.5 * length(still_optics.xy));   // 1 in the corner
+        float rFrame = length(q) * 0.70710678;                           // 1 in the corner, frame shaped
+
+        // the lens: vignette as light lost, and the film: brightness only for black and white
+        float mode = still_vignette.x;
+        bool bw = still_optics.w > 0.5;
+        if (mode > 0.5 || bw) {
+            vec3 lin = pow(max(c, vec3(0.0)), vec3(2.2));
+            if (mode > 1.5) {
+                float t = length(mm) / still_optics.z;           // tan of the angle to this point
+                float cos2 = 1.0 / (1.0 + t * t);
+                float natural = cos2 * cos2;
+                float optical = exp2(-still_vignette2.y * rCircle * rCircle * rCircle);
+                lin *= pow(natural * optical, still_vignette.y);
+            } else if (mode > 0.5) {
+                float r = mix(rFrame, rCircle, still_vignette2.x);
+                lin *= 1.0 - still_vignette.y * smoothstep(still_vignette.z, still_vignette.w, r);
+            }
+            if (bw) lin = vec3(dot(lin, vec3(0.2126, 0.7152, 0.0722)));
+            c = pow(lin, vec3(1.0 / 2.2));
+        }
+
+        // the film: grain
         float amount = still_finish.y;
         if (amount > 0.0) {
             vec2 p = gl_FragCoord.xy / still_finish.z;
@@ -255,15 +306,35 @@ const finishGLSL = /* glsl */ `
             float l = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
             c += g * amount * 0.12 * sqrt(4.0 * l * (1.0 - l));
         }
+
+        // the passepartout over the overscan
+        vec2 fp = gl_FragCoord.xy;
+        if (any(lessThan(fp, still_frame.xy)) || any(greaterThan(fp, still_frame.zw))) c *= 1.0 - still_vignette2.z;
+
         gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
     }
 `;
+
+/** The vignette, as the finishing step draws it. */
+export type FinishVignette =
+    | { mode: 'off' }
+    | { mode: 'hand'; amount: number; start: number; end: number; roundness: number }
+    | { mode: 'physical'; amount: number; fStop: number };
 
 /** How the image is finished on its way to the canvas. */
 export type Finish = {
     fringing: number;            // SuperSplat's fringing intensity, 0 off
     grain: Grain;
+    film: FilmType;
+    vignette: FinishVignette;
+    sensor: [number, number];    // mm; gives the frame its aspect and the vignette its geometry
+    focalLength: number;         // mm
+    passepartout: number;        // 0 the overscan shows, 1 black
 };
+
+// Optical vignetting of a lens wide open, at the image corner: about one
+// and a half stops at f/1.4, gone by f/5.6.
+const opticalStops = (fStop: number) => 1.5 * Math.min(Math.max(Math.log2(5.6 / fStop) / 2, 0), 1);
 
 const ADD = new BlendState(true, BLENDEQUATION_ADD, BLENDMODE_ONE, BLENDMODE_ONE);
 
@@ -589,11 +660,26 @@ export class StillFrames {
         const g = finish.grain;
         this.shownSource = source;
         this.seed = grainSeed(g);
+        const bw = finish.film === 'bw';
+        const [sensorW, sensorH] = finish.sensor;
+        const r = frameRect(source.width, source.height, sensorW / sensorH);
+        const v = finish.vignette;
         scope.resolve('still_image').setValue(source.colorBuffer);
         scope.resolve('still_finish').setValue([
-            finish.fringing * FRINGING_SCALE, g.enabled ? g.intensity : 0, g.size, g.color
+            finish.fringing * FRINGING_SCALE, g.enabled ? g.intensity : 0, g.size, bw ? 0 : g.color
         ]);
         scope.resolve('still_seed').setValue(this.seed);
+        // the canvas has the same size as the source; the frame is centred, so
+        // it lies the same counted from the bottom (gl_FragCoord) as from the top
+        scope.resolve('still_frame').setValue([Math.round(r.x), Math.round(r.y), Math.round(r.x + r.w), Math.round(r.y + r.h)]);
+        scope.resolve('still_optics').setValue([sensorW, sensorH, finish.focalLength, bw ? 1 : 0]);
+        scope.resolve('still_vignette').setValue(
+            v.mode === 'hand' ? [1, v.amount, v.start, Math.max(v.end, v.start + 1e-3)]
+                : v.mode === 'physical' ? [2, v.amount, 0, 0] : [0, 0, 0, 0]
+        );
+        scope.resolve('still_vignette2').setValue([
+            v.mode === 'hand' ? v.roundness : 0, v.mode === 'physical' ? opticalStops(v.fStop) : 0, finish.passepartout, 0
+        ]);
         this.device.setBlendState(BlendState.NOBLEND);
         drawQuadWithShader(this.device, null, this.finishShader);
     }
