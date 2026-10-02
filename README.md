@@ -74,10 +74,14 @@ distance, no separate field of view.
   next, so the eased-out tail of the camera controls does not hold it up
   (it starts over once the image drifts more than half a pixel). Three
   things keep the build-up calm:
-  - the lens points come in mirrored pairs and the still is shown after
-    each whole pair, so they always average out at the centre of the lens
-    and an out-of-focus object stays in its place instead of wandering by
-    up to its blur radius while samples come in;
+  - the lens points come in groups of eight, two rings of four points a
+    quarter turn apart (radius √u and √(1 − u), Halton sequence), and the
+    still is shown after each whole group. Every shown still is then
+    centred, round and of the right size, so an out-of-focus object
+    neither wanders, nor stretches one way and then another, nor grows
+    and shrinks while samples come in; each new group eases in over a few
+    frames, so the still sharpens as one calm movement. Until the first
+    group is in (eight frames), the moving image stays on screen;
   - an *over-blur* on top of the average, as in Blender EEVEE: the quick
     DoF with each blur circle scaled to 1.5 / √n after n samples (at most
     the full blur), about the gap between the lens points, so a few

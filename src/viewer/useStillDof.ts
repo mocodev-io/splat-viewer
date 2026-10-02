@@ -5,7 +5,7 @@ import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs'
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import type { Lens } from '../scene/experience';
 import { StillFrames } from './stillFrames';
-import { Aperture } from './aperture';
+import { Aperture, APERTURE_GROUP } from './aperture';
 
 /** Aperture samples per still, by quality. */
 export const STILL_SAMPLES = { low: 16, medium: 48, high: 128 } as const;
@@ -195,13 +195,19 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
             s.start = false;
         }
         const { lens, focus } = live.current;
+        // all samples in: keep rendering the average until the screen has eased in
+        if (sf.count >= STILL_SAMPLES[lens.blurQuality]) {
+            sf.prepare(engine, true, null, false, range);
+            s.overblur = Math.min(OVERBLUR / Math.sqrt(Math.max(sf.shown, 1)), 1);
+            return;
+        }
         if (!s.aperture?.is(lens)) s.aperture = new Aperture(lens);
         const [u, v] = s.aperture.sample(sf.count);
         const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
         sf.prepare(engine, true, [u, v, lens.catsEye], false, range);
-        // the average composed this frame shows the whole pairs among count + 1 samples
-        const shown = (sf.count + 1) - (sf.count + 1) % 2;
+        // the average composed this frame shows the whole groups among count + 1 samples
+        const shown = (sf.count + 1) - (sf.count + 1) % APERTURE_GROUP;
         s.overblur = Math.min(OVERBLUR / Math.sqrt(Math.max(shown, 1)), 1);
     });
 
@@ -210,15 +216,15 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         if (!sf) return;
         const s = state.current;
         if (s.mode === 'still') {
-            // the still shows from the first whole pair on; with the over-blur
-            // it already looks much like the moving frame it follows
-            sf.present(true, sf.shown >= 2 ? 1 : 0);
-            if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality]) {
+            // whole groups, eased in (stillFrames.ts); done once all are in
+            // and the screen has caught up
+            sf.present(true);
+            if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality] && sf.settled) {
                 s.mode = 'done';
                 app.autoRender = false;
             }
         } else {
-            sf.present(false, 1);
+            sf.present(false);
         }
     });
 

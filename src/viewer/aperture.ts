@@ -10,18 +10,18 @@
 // - `anamorphic` squeezes the shape horizontally into an upright oval, the
 //   look of an anamorphic lens (1 is spherical, 2 a 2× squeeze).
 //
-// Points come from the R2 sequence (Roberts 2018), mapped onto the unit disc
-// with Shirley & Chiu's concentric map, which keeps them as evenly spread
-// as they were in the square (a plain polar map bunches them into spokes).
-// Any first n points cover the aperture evenly, so the still looks right
-// early and only gets smoother.
-//
-// The points come in mirrored pairs: point 2k + 1 is point 2k through the
-// centre (the opposite corner of the square, which the concentric map turns
-// into the opposite point of the disc). After every pair the lens points
-// average out at the centre, so the still, shown after each pair, does not
-// wander: with a lopsided few points an out-of-focus object would sit off
-// its place by up to its blur radius and drift back as samples come in.
+// The points come in groups of eight on the unit disc: two rings of four
+// points a quarter turn apart, at radius √u and √(1 − u), the second ring
+// turned an eighth of a turn against the first. The still is shown after
+// each whole group (stillFrames.ts), and every group on its own averages
+// out at the centre, spreads equally in every direction and has the mean
+// square radius of the whole disc (u and 1 − u average to a half). So an
+// out-of-focus object neither sits off its place, nor gets stretched one way
+// and then another, nor grows and shrinks while the samples come in: it only
+// gets smoother. u comes from the van der Corput sequence (halved, so the
+// inner rings fill the inner half of the area and the outer rings the
+// outer) in base 2, the ring angle from it in base 3: together the Halton
+// sequence, whose two coordinates do not line up into a pattern.
 //
 // Each shape is a star shape around the centre with its edge at distance
 // b(θ). A disc point (ρ, α) goes to angle θ = F⁻¹(α / 2π), where F is the
@@ -34,7 +34,15 @@ import type { Lens } from '../scene/experience';
 export type ApertureShape = Pick<Lens, 'blades' | 'bladeRoundness' | 'bladeRotation' | 'anamorphic'>;
 
 const TABLE = 512;
-const R2 = [0.7548776662466927, 0.5698402909980532];
+/** Lens points per group; the still is shown after whole groups. */
+export const APERTURE_GROUP = 8;
+/** The van der Corput sequence in a base: in base 2, 1 → 1/2, 2 → 1/4, 3 → 3/4, 4 → 1/8, ... */
+function vanDerCorput(n: number, base: number) {
+    let v = 0;
+    let f = 1 / base;
+    for (; n > 0; n = Math.floor(n / base), f /= base) v += (n % base) * f;
+    return v;
+}
 
 /** Distance from the centre to the edge of the unsqueezed shape, at angle θ. */
 function edge(shape: ApertureShape, theta: number) {
@@ -45,18 +53,6 @@ function edge(shape: ApertureShape, theta: number) {
     const local = ((a % sector) + sector) % sector - sector / 2;     // angle from the middle of a blade
     const polygon = Math.cos(sector / 2) / Math.cos(local);
     return polygon + (1 - polygon) * shape.bladeRoundness;
-}
-
-/** Shirley & Chiu's concentric map from the unit square to the disc: radius, angle in [0, 2π). */
-function concentric(u: number, v: number): [number, number] {
-    const a = 2 * u - 1;
-    const b = 2 * v - 1;
-    if (a === 0 && b === 0) return [0, 0];
-    const [r, phi] = Math.abs(a) > Math.abs(b)
-        ? [a, (Math.PI / 4) * (b / a)]
-        : [b, Math.PI / 2 - (Math.PI / 4) * (a / b)];
-    const angle = r < 0 ? phi + Math.PI : phi;
-    return [Math.abs(r), ((angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)];
 }
 
 export class Aperture {
@@ -83,15 +79,14 @@ export class Aperture {
 
     /** Point i of the sequence, in units of the f-stop radius (x right, y up). */
     sample(i: number): [number, number] {
-        // the R2 sequence's own first point is the centre; start one further
-        const k = (i >> 1) + 1;
-        let u = (0.5 + R2[0] * k) % 1;
-        let v = (0.5 + R2[1] * k) % 1;
-        if (i & 1) {
-            u = 1 - u;
-            v = 1 - v;
-        }
-        const [rho, alpha] = concentric(u, v);
+        const group = Math.floor(i / APERTURE_GROUP);
+        const member = i % APERTURE_GROUP;
+        // inner ring (members 0–3) or outer ring (4–7), four quarter turns each
+        const u = vanDerCorput(group + 1, 2) / 2;
+        const outer = member >= 4;
+        const rho = Math.sqrt(outer ? 1 - u : u);
+        const turn = vanDerCorput(group, 3) * Math.PI / 2 + (outer ? Math.PI / 4 : 0);
+        const alpha = (turn + (member % 4) * Math.PI / 2) % (2 * Math.PI);
         const t = alpha / (2 * Math.PI);
         // invert the angle distribution: find the bin, interpolate within it
         let lo = 0;

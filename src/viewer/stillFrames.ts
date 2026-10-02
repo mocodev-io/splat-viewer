@@ -41,11 +41,16 @@
 // are put back into the scene depth after each sample, so the over-blur and
 // the depth views see the unshifted view the still started from.
 //
+// The lens points come in symmetric groups of eight (aperture.ts), and the
+// still shows whole groups only: each shown average is centred, round and of
+// the right size. A new group eases in over a few frames (`display`) instead
+// of switching at once, so the still refines as one calm sharpening; until
+// the first group is in, the last moving frame stays on screen.
+//
 // The camera renders into `frame` (CameraFrame composes into it), and every
-// frame is presented to the canvas from here: the frame as composed, faded in
-// over the first samples from the last moving frame (`hold`) so the switch
-// to the still does not flash a sharp image.
+// frame is presented to the canvas from here.
 
+import { APERTURE_GROUP } from './aperture';
 import {
     ADDRESS_CLAMP_TO_EDGE, BLENDEQUATION_ADD, BLENDMODE_ONE, BlendState, FILTER_LINEAR, FILTER_NEAREST,
     FramePass, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, PIXELFORMAT_RGBA8, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
@@ -170,6 +175,11 @@ const presentGLSL = /* glsl */ `
 
 const ADD = new BlendState(true, BLENDEQUATION_ADD, BLENDMODE_ONE, BLENDMODE_ONE);
 
+// How much of the way to a new group's image the screen goes each frame,
+// and after how many frames since the last group it counts as settled.
+const EASE = 0.35;
+const SETTLE_FRAMES = 10;
+
 // cat's eye at full strength: the barrel disc is shifted by this many
 // aperture radii at the image corner (the overlap there is about 40 %)
 const CATS_EYE_SHIFT = 1;
@@ -219,9 +229,11 @@ class AccumulatePass extends FramePass {
 
 export class StillFrames {
     readonly frame: RenderTarget;          // the camera composes here
-    private hold: RenderTarget;            // the last moving frame
+    private display: [RenderTarget, RenderTarget];   // what is on screen during the still, and the next
     private sum: RenderTarget;             // weighted sum of aperture samples, linear HDR
-    private pairs: RenderTarget;           // the sum as it was after the last whole pair of samples
+    private groups: RenderTarget;          // the sum as it was after the last whole group of samples
+    private lastShown = 0;                 // samples in the group being eased in
+    private sinceGroup = 0;                // frames since that group came in
     private avg: RenderTarget;             // their average, read by the passes after the scene pass
     private geo: RenderTarget;             // depth and coverage of the last moving frame
     private geoValid = false;
@@ -252,17 +264,22 @@ export class StillFrames {
         return { texture: this.ranges[1].colorBuffer, ready: this.rangeFrames > 0 };
     }
 
-    /** Samples the still shows: whole pairs. */
+    /** Samples the still shows: whole groups. */
     get shown() {
-        return this.count - this.count % 2;
+        return this.count - this.count % APERTURE_GROUP;
+    }
+
+    /** Whether the screen has caught up with the last group. */
+    get settled() {
+        return this.shown > 0 && this.sinceGroup >= SETTLE_FRAMES;
     }
 
     constructor(app: AppBase) {
         const device = this.device = app.graphicsDevice;
         this.frame = target(device, 'StillFrame', PIXELFORMAT_RGBA8, true);
-        this.hold = target(device, 'StillHold', PIXELFORMAT_RGBA8, false);
+        this.display = [target(device, 'StillDisplayA', PIXELFORMAT_RGBA8, false), target(device, 'StillDisplayB', PIXELFORMAT_RGBA8, false)];
         this.sum = target(device, 'StillSum', PIXELFORMAT_RGBA16F, false);
-        this.pairs = target(device, 'StillPairs', PIXELFORMAT_RGBA16F, false);
+        this.groups = target(device, 'StillGroups', PIXELFORMAT_RGBA16F, false);
         this.avg = target(device, 'StillAverage', PIXELFORMAT_RGBA16F, false, FILTER_LINEAR);
         this.geo = target(device, 'StillGeometry', PIXELFORMAT_RGBA32F, false);
         this.pass = new AccumulatePass(device, this);
@@ -288,20 +305,17 @@ export class StillFrames {
     resize() {
         const { width, height } = this.device;
         if (this.frame.width === width && this.frame.height === height) return false;
-        for (const rt of [this.frame, this.hold]) rt.resize(width, height);
+        for (const rt of [this.frame, ...this.display]) rt.resize(width, height);
         this.count = 0;
         return true;
     }
 
-    /** Keeps the frame now in `frame` (the last moving one) to fade from, and empties the sum. */
+    /** Keeps the frame now in `frame` (the last moving one) on screen, and empties the sum. */
     start() {
-        const scope = this.device.scope;
-        scope.resolve('still_base').setValue(this.frame.colorBuffer);
-        scope.resolve('still_frame').setValue(this.frame.colorBuffer);
-        scope.resolve('still_weight').setValue(0);
-        this.device.setBlendState(BlendState.NOBLEND);
-        drawQuadWithShader(this.device, this.hold, this.presentShader);
+        this.mix(this.display[0], this.frame, this.frame, 0);
         this.count = 0;
+        this.lastShown = 0;
+        this.sinceGroup = 0;
     }
 
     /**
@@ -356,7 +370,7 @@ export class StillFrames {
         const scene = this.scene;
         if (!scene) return;
         if (this.sum.width !== scene.width || this.sum.height !== scene.height) {
-            for (const rt of [this.sum, this.pairs, this.avg, this.geo]) rt.resize(scene.width, scene.height);
+            for (const rt of [this.sum, this.groups, this.avg, this.geo]) rt.resize(scene.width, scene.height);
             this.count = 0;
             this.geoValid = false;
         }
@@ -406,15 +420,14 @@ export class StillFrames {
             drawQuadWithShader(this.device, this.sum, this.accumulateShader);
             this.count++;
             this.sample = null;
-            // the lens points come in mirrored pairs (aperture.ts): the still
-            // shows whole pairs only, so it never sits off-centre
-            if (this.count % 2 === 0) {
+            // the still shows whole groups only
+            if (this.count % APERTURE_GROUP === 0) {
                 scope.resolve('still_source').setValue(this.sum.colorBuffer);
                 this.device.setBlendState(BlendState.NOBLEND);
-                drawQuadWithShader(this.device, this.pairs, this.copyShader);
+                drawQuadWithShader(this.device, this.groups, this.copyShader);
             }
         }
-        scope.resolve('still_sum').setValue(this.pairs.colorBuffer);
+        scope.resolve('still_sum').setValue(this.groups.colorBuffer);
         scope.resolve('still_scene').setValue(scene);
         scope.resolve('still_geo').setValue(this.geo.colorBuffer);
         scope.resolve('still_geoValid').setValue(restore ? 1 : 0);
@@ -422,20 +435,42 @@ export class StillFrames {
         drawQuadWithShader(this.device, this.avg, this.averageShader);
     }
 
-    /** To the canvas: the frame as composed, faded in by `weight` over the held frame when `fade`. */
-    present(fade: boolean, weight: number) {
+    /**
+     * To the canvas: the frame as composed, or for a still building up, the
+     * screen eased a step towards the newest whole group (the last moving
+     * frame until the first group is in).
+     */
+    present(still: boolean) {
+        if (!still) {
+            this.mix(null, this.frame, this.frame, 1);
+            return;
+        }
+        if (this.shown > 0) {
+            if (this.shown !== this.lastShown) {
+                this.lastShown = this.shown;
+                this.sinceGroup = 0;
+            }
+            const [current, next] = this.display;
+            this.mix(next, current, this.frame, EASE);
+            this.display = [next, current];
+            this.sinceGroup++;
+        }
+        this.mix(null, this.display[0], this.display[0], 0);
+    }
+
+    private mix(dest: RenderTarget | null, base: RenderTarget, frame: RenderTarget, weight: number) {
         const scope = this.device.scope;
-        scope.resolve('still_base').setValue((fade ? this.hold : this.frame).colorBuffer);
-        scope.resolve('still_frame').setValue(this.frame.colorBuffer);
-        scope.resolve('still_weight').setValue(fade ? weight : 1);
+        scope.resolve('still_base').setValue(base.colorBuffer);
+        scope.resolve('still_frame').setValue(frame.colorBuffer);
+        scope.resolve('still_weight').setValue(weight);
         this.device.setBlendState(BlendState.NOBLEND);
-        drawQuadWithShader(this.device, null, this.presentShader);
+        drawQuadWithShader(this.device, dest, this.presentShader);
     }
 
     destroy() {
         this.active = false;
         this.pass.enabled = false;
-        for (const rt of [this.frame, this.hold, this.sum, this.pairs, this.avg, this.geo, ...this.ranges]) {
+        for (const rt of [this.frame, ...this.display, this.sum, this.groups, this.avg, this.geo, ...this.ranges]) {
             rt.destroyTextureBuffers();
             rt.destroy();
         }
