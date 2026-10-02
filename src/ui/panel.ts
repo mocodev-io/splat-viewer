@@ -184,14 +184,23 @@ export function useLookPanel() {
 
 export const DEBUG_VIEWS = ['image', 'depth', 'blur amount'] as const;
 export type DebugView = typeof DEBUG_VIEWS[number];
+export const DEPTH_RANGES = ['camera near/far', 'scene linear', 'scene inverse'] as const;
+export type DepthRange = typeof DEPTH_RANGES[number];
 
 // Checks: is the scene depth what we expect, how much blur does the lens
-// give where (the CoC: red behind the focus, green in front), and do
-// objects and splats cover each other correctly.
+// give where (red behind the focus, green in front or spilled over from it),
+// and do objects and splats cover each other correctly.
+// Depth range: the engine's view runs from the camera's near to its far
+// clip; the scene ranges are normalized from the nearest to the farthest
+// depth in the image (z-depth normalize), linearly or by 1 / depth.
 export function useDebugPanel() {
     const [values] = useControls('Debug', () => ({
         view: { value: 'image' as DebugView, options: [...DEBUG_VIEWS], label: 'View' },
+        depthRange: {
+            value: 'scene linear' as DepthRange, options: [...DEPTH_RANGES], label: 'Depth range',
+            render: get => get('Debug.view') === 'depth'
+        },
         testObjects: { value: false, label: 'Test objects' }
     }), { collapsed: true });
-    return { view: values.view as DebugView, testObjects: values.testObjects };
+    return { view: values.view as DebugView, depthRange: values.depthRange as DepthRange, testObjects: values.testObjects };
 }

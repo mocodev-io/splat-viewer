@@ -6,8 +6,8 @@ import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { horizontalFov, type CameraPose, type Lens, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
-import type { DebugView } from '../ui/panel';
-import { updateLensDof } from './lensDof';
+import type { DebugView, DepthRange } from '../ui/panel';
+import { updateLensDof, type DepthView } from './lensDof';
 
 export type ViewRequest = { pose: CameraPose; id: number };
 
@@ -31,6 +31,7 @@ type ViewerCameraProps = {
     focus: RefObject<number>;             // live focus distance, m (manual or autofocus)
     farClip: number;
     debugView: DebugView;
+    depthRange: DepthRange;
     api: RefObject<CameraApi | null>;
     tonemapping: Tonemapping;
     highPrecision: boolean;
@@ -41,7 +42,7 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, api, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
     const app = useApp();
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
@@ -148,14 +149,20 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, api, tonem
         const cf = frame.current;
         if (!cf) return;
         cf.dof.enabled = lens.dof || debugView !== 'image';
-        cf.rendering.debug = debugView === 'depth' ? 'depth' : debugView === 'blur amount' ? 'dofcoc' : 'none';
-    }, [lens.dof, debugView]);
+        // the engine draws the near/far depth view, lensDof.ts the normalized ones
+        cf.rendering.debug = debugView === 'depth' && depthRange === 'camera near/far' ? 'depth'
+            : debugView === 'blur amount' ? 'dofcoc' : 'none';
+    }, [lens.dof, debugView, depthRange]);
+
+    // normalized depth views (lensDof.ts)
+    const depthView: DepthView = debugView !== 'depth' ? 0
+        : depthRange === 'scene linear' ? 1 : depthRange === 'scene inverse' ? 2 : 0;
 
     // focus and image size change between frames, so the lens is set per frame
     useAppEvent('prerender', () => {
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
-        updateLensDof(app, cf, lens, focus.current, lens.dof || debugView === 'blur amount');
+        updateLensDof(app, cf, lens, focus.current, lens.dof || debugView === 'blur amount', depthView);
     });
 
     return (

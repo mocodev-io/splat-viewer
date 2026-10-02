@@ -123,7 +123,12 @@ Our additions live under `extras`, which SuperSplat ignores:
 **Debug** (collapsed in the panel): *View* shows the image, the scene depth
 the effects work with, or the blur each pixel gets (red behind the focus
 plane, green in front of it or spilled over from it, dark where it is
-sharp).
+sharp). *Depth range* sets how the depth view shows depth: *camera
+near/far* is the engine's view (linear from the near to the far clip, so a
+room only uses a small part of the grey scale); *scene linear* and *scene
+inverse* normalize it from the nearest to the farthest depth in the image
+(z-depth normalize), linearly or by 1 / depth, which shows more detail
+close by. White is no depth: nothing there.
 *Test objects* puts an opaque box and a glass sphere where the start view
 looks, to check how objects and splats cover each other.
 

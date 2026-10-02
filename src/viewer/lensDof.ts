@@ -39,6 +39,7 @@ const composeDofGLSL = /* glsl */ `
         uniform highp sampler2D uSceneDepthMap;
         uniform vec4 lens_params;    // focus (scene units), c∞ (pixels, radius), max radius, edge band (pixels)
         uniform vec4 lens_quality;   // samples, depth probes, depth format (1 linear, 2 reciprocal), far
+        uniform float lens_view;     // normalized depth view: 0 off, 1 linear, 2 inverse
 
         float lensDepth(vec2 uv) {
             float v = texture2DLod(uSceneDepthMap, uv, 0.0).r;
@@ -151,10 +152,49 @@ const composeDofGLSL = /* glsl */ `
     #endif
 `;
 
+// The normalized depth view, through the engine's composeMainEndPS hook (after
+// tone mapping, before gamma, like the engine's own depth view): z-depth
+// normalize, as compositing tools do it. The nearest and farthest depth in
+// the image are found from a 12 x 12 grid of depth samples (the same for
+// every pixel, so cheap enough for a debug view), and the depth is spread over
+// 0..1 between them, linearly or by 1 / depth (more detail close by). Pixels
+// without depth (nothing there) come out white and do not count.
+const composeMainEndGLSL = /* glsl */ `
+    #ifdef DOF
+    #ifndef LENS_OFF
+        if (lens_view > 0.5) {
+            float dMin = 1e30;
+            float dMax = 0.0;
+            for (int gy = 0; gy < 12; gy++) {
+                for (int gx = 0; gx < 12; gx++) {
+                    vec2 g = (vec2(float(gx), float(gy)) + 0.5) / 12.0;
+                    float gd = lensDepth(g);
+                    if (gd < lens_quality.w * 0.999) {
+                        dMin = min(dMin, gd);
+                        dMax = max(dMax, gd);
+                    }
+                }
+            }
+            dMax = max(dMax, dMin * 1.001);
+            float d = lensDepth(uv);
+            float t = lens_view > 1.5
+                ? (1.0 / dMin - 1.0 / max(d, 1e-6)) / (1.0 / dMin - 1.0 / dMax)
+                : (d - dMin) / (dMax - dMin);
+            result = d < lens_quality.w * 0.999 ? vec3(clamp(t, 0.0, 1.0)) : vec3(1.0);
+        }
+    #endif
+    #endif
+`;
+
 /** Puts the lens DoF into the engine's compose shader. Call once, before DoF is first switched on. */
 export function installLensDof(app: AppBase) {
-    ShaderChunks.get(app.graphicsDevice, SHADERLANGUAGE_GLSL).set('composeDofPS', composeDofGLSL);
+    const chunks = ShaderChunks.get(app.graphicsDevice, SHADERLANGUAGE_GLSL);
+    chunks.set('composeDofPS', composeDofGLSL);
+    chunks.set('composeMainEndPS', composeMainEndGLSL);
 }
+
+/** Normalized depth view: 0 off, 1 linear, 2 inverse. */
+export type DepthView = 0 | 1 | 2;
 
 // Samples and depth probes per quality step, and the largest blur radius as
 // a fraction of the image height: more samples keep a bigger blur smooth.
@@ -170,7 +210,7 @@ const QUALITY: Record<BlurQuality, { samples: number; probes: number; maxBlur: n
  * depth and the compose hook) and the lens uniforms for this frame.
  * `focus` in meters; `blur` false keeps the image sharp (debug views).
  */
-export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: boolean) {
+export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: boolean, view: DepthView) {
     const dof = cf.dof;
     dof.highQuality = false;
     dof.nearBlur = false;
@@ -192,4 +232,5 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const edgeBand = 0.01 * device.height;
     scope.resolve('lens_params').setValue([S / lens.metersPerUnit, blur ? radiusPx : 0, q.maxBlur * device.height, edgeBand]);
     scope.resolve('lens_quality').setValue([q.samples, q.probes, reciprocal ? 2 : 1, camera.farClip]);
+    scope.resolve('lens_view').setValue(view);
 }

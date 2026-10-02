@@ -242,6 +242,7 @@ export function App() {
                     focus={focus}
                     farClip={farClip}
                     debugView={debug.view}
+                    depthRange={debug.depthRange}
                     api={cameraApi}
                     tonemapping={look.tonemapping}
                     highPrecision={look.highPrecision}
