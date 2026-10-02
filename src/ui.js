@@ -5,11 +5,11 @@ import GUI from 'lil-gui';
 import { presets, presetSettings, mergeInto } from './settings.js';
 import { looks, letterboxes, dofModes, bokehShapes } from './post.js';
 import { sensors } from './camera.js';
+import { qualityLevels } from './perf.js';
 
 export class Panel {
-    constructor(settings, { splats, luts, onSplat, onResetCamera }) {
+    constructor(settings, { splats, luts, onLoad, onUnload, onResetCamera }) {
         this.settings = settings;
-        this.onSplat = onSplat;
         this.refreshQueued = false;
         this.preset = { name: 'Clean' };
 
@@ -22,7 +22,9 @@ export class Panel {
             mergeInto(s, presetSettings(name, s));
             this.refresh();
         });
-        this.splatCtrl = gui.add(s.scene, 'splat', splats).name('Splat').onChange(v => onSplat(v));
+        this.splatCtrl = gui.add(s.scene, 'splat', splats).name('Splat');
+        gui.add({ load: onLoad }, 'load').name('Load');
+        gui.add({ unload: onUnload }, 'unload').name('Unload');
         gui.add({ reset: onResetCamera }, 'reset').name('Reset camera (R)');
         gui.add({ save: () => this.exportJson() }, 'save').name('Export settings');
         gui.add({ load: () => this.importJson() }, 'load').name('Import settings');
@@ -56,7 +58,7 @@ export class Panel {
         lens.add(s.lens, 'focusDistance', 0.05, 100, 0.01).name('Focus distance');
         this.dofControls = {
             lens: [
-                lens.add(s.lens, 'fStop', 0.95, 22, 0.05).name('f-stop'),
+                lens.add(s.lens, 'fStop', 0.5, 22, 0.05).name('f-stop'),
                 lens.add(s.lens, 'bokeh', bokehShapes).name('Bokeh shape')
             ],
             fast: [
@@ -162,11 +164,20 @@ export class Panel {
         scene.add(s.scene, 'flip').name('Flip upside down');
         scene.addColor(s.scene, 'background').name('Background');
         scene.add(s.scene, 'metersPerUnit', 0.01, 10, 0.01).name('Meters per unit');
-        scene.add(s.scene, 'renderScale', 0.25, 1, 0.05).name('Render scale');
         scene.add(s.scene, 'antiAlias').name('Splat anti-aliasing');
         scene.close();
 
+        // ---- performance
+        const perf = gui.addFolder('Performance');
+        perf.add(s.performance, 'quality', Object.keys(qualityLevels)).name('Quality');
+        perf.add(s.performance, 'resolution', ['auto', 'fixed']).name('Resolution')
+            .onChange(() => this.updatePerfControls());
+        this.targetCtrl = perf.add(s.performance, 'targetFps', [30, 45, 60]).name('Target fps');
+        this.scaleCtrl = perf.add(s.performance, 'scale', 0.35, 1, 0.05).name('Resolution scale');
+        perf.close();
+
         this.updateDofControls();
+        this.updatePerfControls();
 
         this.fileInput = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' });
         this.fileInput.addEventListener('change', () => this.readImport());
@@ -179,10 +190,11 @@ export class Panel {
         for (const c of this.dofControls.fast) c.show(mode === 'fast');
     }
 
-    setSplats(list) {
-        this.splatCtrl = this.splatCtrl.options(list).onChange(v => this.onSplat(v));
-        this.splatCtrl.name('Splat');
-        this.splatCtrl.updateDisplay();
+    // auto resolution drives the scale itself; fixed lets you set it
+    updatePerfControls() {
+        const auto = this.settings.performance.resolution === 'auto';
+        this.targetCtrl.show(auto);
+        this.scaleCtrl.enable(!auto);
     }
 
     // Repaint every control from the settings object, at most once per frame.
@@ -193,6 +205,7 @@ export class Panel {
             this.refreshQueued = false;
             for (const c of this.gui.controllersRecursive()) c.updateDisplay();
             this.updateDofControls();
+            this.updatePerfControls();
         });
     }
 
@@ -214,10 +227,12 @@ export class Panel {
         const file = this.fileInput.files[0];
         if (!file) return;
         try {
-            const previousSplat = this.settings.scene.splat;
+            // the splat choice and performance belong to this device, not to a look
+            const keep = { splat: this.settings.scene.splat, performance: structuredClone(this.settings.performance) };
             mergeInto(this.settings, JSON.parse(await file.text()));
+            this.settings.scene.splat = keep.splat;
+            Object.assign(this.settings.performance, keep.performance);
             this.refresh();
-            if (this.settings.scene.splat !== previousSplat) this.onSplat(this.settings.scene.splat);
         } catch (err) {
             console.warn('import failed', err);
         }

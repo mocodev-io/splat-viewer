@@ -56,7 +56,8 @@ export class Post {
             'motionBlur', 'reproject', 'camMotion', 'kuwahara', 'halation', 'anamorphic', 'anamorphicTint',
             'dirt', 'lightLeak', 'posterize', 'look', 'lookMix', 'cell', 'duoDark', 'duoLight', 'paper',
             'outline', 'outlineColor', 'grain', 'grainSize', 'grainAnimated', 'letterbox',
-            'dofMode', 'depthMode', 'far', 'focus', 'aperture', 'dofMaxRadius', 'nearBlur', 'bokeh', 'dofSeed'
+            'dofMode', 'depthMode', 'far', 'focus', 'aperture', 'dofMaxRadius', 'nearBlur', 'bokeh', 'dofSeed',
+            'dofSamples', 'dofProbes', 'motionBlurSamples'
         ]) {
             this.u[name] = scope.resolve(`sv_${name}`);
         }
@@ -74,7 +75,7 @@ export class Post {
         }
     }
 
-    update(dt, rig) {
+    update(dt, rig, level) {
         const s = this.settings;
         const f = this.frame;
         const app = this.app;
@@ -83,11 +84,10 @@ export class Post {
         this.updateLut();
 
         // ---- scene / splat rendering
-        f.rendering.renderTargetScale = s.scene.renderScale;
+        f.rendering.renderTargetScale = 1;     // resolution is handled for the whole canvas (perf.js)
         f.rendering.toneMapping = toneMappings[s.light.toneMapping] ?? pc.TONEMAP_ACES2;
         f.rendering.sharpness = s.film.sharpen;
         app.scene.gsplat.fisheye = s.camera.fisheye;
-        app.scene.gsplat.antiAlias = s.scene.antiAlias;
 
         // ---- lens
         // "lens" is our own thin-lens DoF in the compose shader. It still keeps
@@ -122,6 +122,8 @@ export class Post {
         f.volumetricFog.intensity = fog.intensity;
         linearColor(fog.tint, f.volumetricFog.tint);
         f.volumetricFog.ambientIntensity = fog.ambient;
+        f.volumetricFog.steps = level.fogSteps;
+        f.volumetricFog.scale = level.fogScale;
         this.sun.setEulerAngles(fog.sunPitch, fog.sunYaw, 0);
         linearColor(fog.sunColor, this.sun.light.color);
         this.sun.light.intensity = fog.sunIntensity;
@@ -132,6 +134,8 @@ export class Post {
         f.ssao.type = s.ssao.enabled ? pc.SSAOTYPE_COMBINE : pc.SSAOTYPE_NONE;
         f.ssao.intensity = s.ssao.intensity;
         f.ssao.radius = s.ssao.radius;
+        f.ssao.samples = level.ssaoSamples;
+        f.ssao.scale = level.ssaoScale;
 
         // ---- colour
         const c = s.color;
@@ -203,8 +207,8 @@ export class Post {
         const params = this.camera.shaderParams;
         const depthMode = !params.sceneDepthMapLinear || params.sceneDepthMapPacked ? 0
             : params.sceneDepthMapReciprocal ? 2 : 1;
-        const sceneWidth = device.width * s.scene.renderScale;
-        const sceneHeight = device.height * s.scene.renderScale;
+        const sceneWidth = device.width;
+        const sceneHeight = device.height;
         const focal = rig.focalLength;
         const focusMm = Math.max(rig.focus * s.scene.metersPerUnit * 1000, focal * 1.05);
         const cocMm = (focal * focal) / (Math.max(s.lens.fStop, 0.5) * (focusMm - focal));
@@ -214,7 +218,13 @@ export class Post {
         u.far.setValue(this.camera.farClip);
         u.focus.setValue(rig.focus);
         u.aperture.setValue(aperture);
-        u.dofMaxRadius.setValue(Math.min(aperture * (s.lens.nearBlur ? 1.5 : 1), 0.08 * sceneHeight));
+        // Far blur never exceeds the infinity size; near blur grows without
+        // bound physically, so it gets a fixed cap independent of the focus.
+        const cap = 0.1 * sceneHeight;
+        u.dofMaxRadius.setValue(s.lens.nearBlur ? cap : Math.min(aperture, cap));
+        u.dofSamples.setValue(level.dofSamples);
+        u.dofProbes.setValue(level.dofProbes);
+        u.motionBlurSamples.setValue(level.motionBlurSamples);
         u.nearBlur.setValue(s.lens.nearBlur ? 1 : 0);
         u.bokeh.setValue(Math.max(0, bokehShapes.indexOf(s.lens.bokeh)));
         u.dofSeed.setValue(s.film.taa ? (this.time * 997) % 1000 : 0);

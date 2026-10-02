@@ -2,6 +2,7 @@ import * as pc from 'playcanvas';
 import { defaults } from './settings.js';
 import { CameraRig } from './camera.js';
 import { Post } from './post.js';
+import { Performance } from './perf.js';
 import { LutLibrary, listFolder } from './luts.js';
 import { Panel } from './ui.js';
 
@@ -22,7 +23,7 @@ const device = await pc.createGraphicsDevice(canvas, {
     alpha: false,
     powerPreference: 'high-performance'
 });
-device.maxPixelRatio = Math.min(window.devicePixelRatio, 2);
+device.maxPixelRatio = 1;      // perf.js takes over from the first frame
 
 const options = new pc.AppOptions();
 options.graphicsDevice = device;
@@ -58,18 +59,24 @@ app.root.addChild(sun);
 // ------------------------------------------------------------------ hud
 
 let statusTimer = 0;
-function status(text) {
+function status(text, sticky = false) {
     $('status').textContent = text;
     clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => { $('status').textContent = ''; }, 2500);
+    if (!sticky) statusTimer = setTimeout(() => { $('status').textContent = ''; }, 2500);
+}
+
+function hint(text) {
+    $('empty-hint').textContent = text;
+    $('empty-hint').hidden = !text;
 }
 
 let panel = null;
-const rig = new CameraRig(app, camera, settings, {
+const events = {
     onSettingsChanged: () => panel?.refresh(),
     onStatus: status
-});
-
+};
+const rig = new CameraRig(app, camera, settings, events);
+const perf = new Performance(app, settings, events);
 const luts = new LutLibrary(device);
 const post = new Post(app, camera, sun, settings, luts);
 
@@ -91,14 +98,27 @@ async function findSplats() {
     return found;
 }
 
+function releaseSplat() {
+    splatEntity?.destroy();
+    splatEntity = null;
+    if (splatAsset) {
+        app.assets.remove(splatAsset);
+        splatAsset.unload();
+        splatAsset = null;
+    }
+}
+
 function loadSplat(name) {
     if (!name) return;
     const token = ++loadToken;
-    status(`loading ${name}…`);
+    status(`loading ${name}…`, true);
+    hint('');
     const url = `splats/${name.split('/').map(encodeURIComponent).join('/')}`;
     const asset = new pc.Asset(name, 'gsplat', { url });
     asset.on('error', err => {
-        if (token === loadToken) status(`failed: ${err}`);
+        if (token !== loadToken) return;
+        status(`failed: ${err}`);
+        hint(splatEntity ? '' : 'Loading failed, see the browser console.');
         console.error(err);
     });
     asset.ready(() => {
@@ -107,23 +127,17 @@ function loadSplat(name) {
             asset.unload();
             return;
         }
-        splatEntity?.destroy();
-        if (splatAsset) {
-            app.assets.remove(splatAsset);
-            splatAsset.unload();
-        }
+        releaseSplat();
         splatAsset = asset;
         splatEntity = new pc.Entity('splat');
         splatEntity.addComponent('gsplat', { asset });
         app.root.addChild(splatEntity);
         lastFlip = null;
         applySceneSettings();
-        settings.scene.splat = name;
-        panel?.refresh();
 
         // frame the splat once its bounds are known
         app.once('frameend', () => {
-            const aabb = splatEntity?.gsplat?.customAabb ?? splatAsset.resource?.aabb;
+            const aabb = splatEntity?.gsplat?.customAabb ?? splatAsset?.resource?.aabb;
             if (aabb) {
                 const world = new pc.BoundingBox();
                 world.setFromTransformedAabb(aabb, splatEntity.getWorldTransform());
@@ -134,6 +148,14 @@ function loadSplat(name) {
     });
     app.assets.add(asset);
     app.assets.load(asset);
+}
+
+function unloadSplat() {
+    loadToken++;                     // also cancels a load in progress
+    if (!splatEntity && !splatAsset) return;
+    releaseSplat();
+    status('unloaded');
+    hint('Pick a splat and press Load.');
 }
 
 let lastFlip = null;
@@ -161,21 +183,21 @@ window.addEventListener('keydown', e => {
 
 // ------------------------------------------------------------------ frame loop
 
-let fpsFrames = 0;
-let fpsTime = 0;
+let hudTime = 0;
 app.on('update', dt => {
+    perf.update(dt);
     applySceneSettings();
+    rig.pickScale = perf.level.pickScale;
     rig.update(dt);
-    post.update(dt, rig);
+    post.update(dt, rig, perf.level);
 
-    fpsFrames++;
-    fpsTime += dt;
-    if (fpsTime >= 0.5) {
-        $('fps').textContent = `${Math.round(fpsFrames / fpsTime)} fps`;
+    hudTime += dt;
+    if (hudTime >= 0.5) {
+        hudTime = 0;
+        const p = settings.performance;
+        $('fps').textContent = `${Math.round(perf.fps)} fps · ${p.quality} · ${Math.round(p.scale * 100)}%`;
         const lens = `${Math.round(rig.focalLength)}mm` + (settings.lens.dof === 'lens' ? ` f/${settings.lens.fStop}` : '');
         $('mode').textContent = [settings.camera.mode, lens, settings.dolly.enabled ? 'dolly' : ''].filter(Boolean).join(' · ');
-        fpsFrames = 0;
-        fpsTime = 0;
     }
 });
 
@@ -185,18 +207,18 @@ app.start();
 
 await luts.scanFolder();
 const splats = await findSplats();
+settings.scene.splat = splats[0] ?? '';
 panel = new Panel(settings, {
     splats,
     luts: luts.names(),
-    onSplat: loadSplat,
+    onLoad: () => loadSplat(settings.scene.splat),
+    onUnload: unloadSplat,
     onResetCamera: () => rig.resetToHome()
 });
 
-if (splats.length) {
-    loadSplat(splats[0]);
-} else {
-    $('empty-hint').hidden = false;
-}
+hint(splats.length
+    ? 'Pick a splat and press Load.'
+    : 'No splats found. Put .ply / .sog files in the mounted splats folder.');
 
 // handy from the browser console
-window.viewer = { app, settings, rig, post };
+window.viewer = { app, settings, rig, post, perf, loadSplat, unloadSplat };

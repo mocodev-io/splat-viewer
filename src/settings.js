@@ -2,11 +2,17 @@
 // JSON import overwrite it, and the camera/post modules read it every frame.
 
 export const defaults = () => ({
+    // device-specific: presets and imported settings leave this alone
+    performance: {
+        quality: 'medium',      // low | medium | high | ultra
+        resolution: 'auto',     // auto (follows the target fps) | fixed
+        targetFps: 30,
+        scale: 1                // resolution scale of the whole pipeline
+    },
     scene: {
         splat: '',
         flip: true,             // most COLMAP-based trainers export y-down
         background: '#000000',
-        renderScale: 1,         // internal resolution, 1 = native
         metersPerUnit: 1,       // scene scale; COLMAP scenes have no real-world size
         antiAlias: false       // for splats trained with mip-splatting style AA
     },
@@ -234,6 +240,7 @@ const controlKeys = ['mode', 'sensor', 'moveSpeed', 'lookSpeed', 'smoothing', 'r
 export function presetSettings(name, current) {
     const s = defaults();
     s.scene = structuredClone(current.scene);
+    s.performance = structuredClone(current.performance);
     for (const key of controlKeys) s.camera[key] = current.camera[key];
     s.lens.autofocus = current.lens.autofocus;
     s.lens.focusDistance = current.lens.focusDistance;

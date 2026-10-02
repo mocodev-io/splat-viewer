@@ -36,7 +36,7 @@ services:
 
 ### Splats folder
 
-The viewer lists these automatically:
+The viewer lists these; pick one and press **Load** (**Unload** frees the memory again):
 
 - `*.ply`: standard 3DGS output, and SuperSplat's compressed `.compressed.ply`
 - `*.sog`: bundled SOG
@@ -87,7 +87,7 @@ Touch works too: one finger looks or orbits, two fingers pinch and pan.
   barrel/pincushion distortion, chromatic aberration, anamorphic streaks,
   lens dirt. Two depth of field models:
   - *lens*: thin-lens blur on full resolution, computed from focal length,
-    f-stop, focus distance and sensor. Blurred foreground spills over sharp
+    f-stop (down to f/0.5, beyond real lenses), focus distance and sensor. Blurred foreground spills over sharp
     background, highlights turn into bokeh, chromatic aberration blurs along.
     Bokeh shape: round, hexagon, octagon, anamorphic, swirl. Set
     **Scene → Meters per unit** once per scene, so the lens maths knows how
@@ -111,6 +111,24 @@ Touch works too: one finger looks or orbits, two fingers pinch and pan.
   move/look speed or smoothing.
 - **Export / import settings** as JSON.
 
+## Performance
+
+The same viewer has to run on a 4K desktop GPU and on integrated graphics at
+1080p. Under **Performance**:
+
+- **Quality** (low / medium / high / ultra) sets the sample counts of lens
+  DoF and motion blur, fog and AO quality, how many tiny splats are skipped,
+  and whether HiDPI displays render at full pixel density (high: up to 1.5x,
+  ultra: 2x; low and medium always 1x).
+- **Resolution: auto** scales the whole pipeline (splats and every effect)
+  to hold the target fps; the HUD shows the current scale. **Fixed** lets
+  you pick the scale yourself.
+
+The biggest costs, roughly in order: lens DoF (cheap where the image is
+sharp), light shafts, oil paint, chromatic aberration together with lens DoF,
+SSAO. The splat count itself matters too; a `.sog` export with fewer splats
+and SH bands 0 helps weak GPUs most.
+
 Effects marked as needing bloom (halation, anamorphic streaks, lens dirt)
 switch bloom on in the background when used.
 
@@ -129,6 +147,7 @@ src/
   post.js      settings -> CameraFrame + compose uniforms
   compose.js   the compose shader
   luts.js      built-in looks, .cube / PNG LUT loading
+  perf.js      quality levels, auto resolution
   settings.js  defaults and presets
   ui.js        lil-gui panel
 ```

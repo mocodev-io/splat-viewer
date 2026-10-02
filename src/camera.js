@@ -97,6 +97,8 @@ export class CameraRig {
         this.picker = null;
         this.pickBusy = false;
         this.pickTimer = 0;
+        this.pickScale = 0.25;          // set from the quality level
+        this.lastPickPose = new pc.Mat4();
 
         this.bindInput();
     }
@@ -306,7 +308,7 @@ export class CameraRig {
             const app = this.app;
             const canvas = this.canvas;
             const rect = canvas.getBoundingClientRect();
-            const scale = 0.25;
+            const scale = this.pickScale;
             const w = Math.max(1, Math.floor(canvas.width * scale));
             const h = Math.max(1, Math.floor(canvas.height * scale));
             if (!this.picker) this.picker = new pc.Picker(app, w, h, true);
@@ -398,10 +400,19 @@ export class CameraRig {
 
         // focus pull
         const lens = s.lens;
+        // Continuous autofocus renders the scene again to read depth, so it
+        // only does that while the camera moves (plus a slow refresh).
         if (lens.autofocus === 'center') {
             this.pickTimer -= dt;
-            if (this.pickTimer <= 0 && !this.pickBusy) {
+            const pose = this.entity.getWorldTransform().data;
+            const last = this.lastPickPose.data;
+            let moved = false;
+            for (let i = 0; i < 16; i++) {
+                if (Math.abs(pose[i] - last[i]) > 1e-3) { moved = true; break; }
+            }
+            if (this.pickTimer <= 0 && !this.pickBusy && (moved || this.pickTimer < -1.5)) {
                 this.pickTimer = 0.2;
+                this.lastPickPose.copy(this.entity.getWorldTransform());
                 const r = this.canvas.getBoundingClientRect();
                 this.pickAt(r.left + r.width / 2, r.top + r.height / 2).then(p => p && this.setFocusPoint(p));
             }

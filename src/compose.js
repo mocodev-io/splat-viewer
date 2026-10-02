@@ -66,6 +66,9 @@ export const composePS = /* glsl */ `
     uniform float sv_nearBlur;         // 1 = blur in front of the focus plane too
     uniform int sv_bokeh;              // 0 round, 1 hexagon, 2 octagon, 3 anamorphic, 4 swirl
     uniform float sv_dofSeed;          // 0 = fixed pattern; changes per frame when TAA can average it
+    uniform float sv_dofSamples;       // gather samples (quality level)
+    uniform float sv_dofProbes;        // neighbour depth probes (quality level)
+    uniform float sv_motionBlurSamples;
 
     uniform float sv_halation;
     uniform float sv_anamorphic;
@@ -299,28 +302,45 @@ export const composePS = /* glsl */ `
         float centerSize = svCoc(centerDepth);
         svDofBlur = centerSize;
         float maxR = sv_dofMaxRadius;
+
+        // How far to gather: this pixel's own blur, or further when a nearer,
+        // more blurred neighbour is big enough to spill over it. A handful of
+        // depth probes finds those. Sharp pixels with nothing blurred in front
+        // of them skip the gather entirely, which is most of the frame.
+        float reach = centerSize;
+        for (int i = 0; i < 32; i++) {
+            if (float(i) >= sv_dofProbes) break;
+            float r = maxR * sqrt((float(i) + 0.5) / sv_dofProbes);
+            float a = float(i) * 2.39996323 + 0.7;
+            float d = svDepth(uv + vec2(cos(a), sin(a)) * r * sceneTextureInvRes);
+            if (d < centerDepth) {
+                float size = svCoc(d);
+                if (size >= r * 0.75) reach = max(reach, size);
+            }
+        }
+        if (reach < 0.75) return base;
+        reach = min(reach, maxR);
+
+        // Samples spread evenly over the disc of that reach, so small blurs get
+        // as many samples as big ones. Each pixel turns the spiral by its own
+        // angle, which turns the sample pattern into fine noise; colour is read
+        // between texels (a free 2x2 average) so tiny highlights are not missed.
         vec3 color = base;
         float total = 1.0;
-        // ~128 samples whatever the size; each pixel turns the spiral by its own
-        // angle, so small highlights read as discs instead of showing the
-        // sample pattern. Colour is read between texels (a free 2x2 average),
-        // which gives tiny highlights more chance to be picked up.
-        float radScale = max(maxR * maxR / 256.0, 0.2);
-        float radius = radScale;
         float angle = svHash(gl_FragCoord.xy + sv_dofSeed) * 6.2831853;
         vec2 between = 0.5 * sceneTextureInvRes;
-        for (int i = 0; i < 260; i++) {
-            if (radius >= maxR) break;
+        for (int i = 0; i < 256; i++) {
+            if (float(i) >= sv_dofSamples) break;
+            float radius = reach * sqrt((float(i) + 0.5) / sv_dofSamples);
             vec2 tc = uv + svBokehOffset(angle, radius, uv) * sceneTextureInvRes;
             vec3 sampleColor = svSampleCA(tc + between);
             float sampleDepth = svDepth(tc);
             float sampleSize = svCoc(sampleDepth);
             if (sampleDepth > centerDepth) sampleSize = min(sampleSize, centerSize * 2.0);
-            float m = smoothstep(radius - 0.5, radius + 0.5, sampleSize);
+            float m = smoothstep(radius - 1.0, radius + 1.0, sampleSize);
             color += mix(color / total, sampleColor, m);
             total += 1.0;
             angle += 2.39996323;
-            radius += radScale / radius;
         }
         return color / total;
     }
@@ -339,12 +359,13 @@ export const composePS = /* glsl */ `
                 if (dot(v, v) > 1e-9) {
                     vec3 blurred = vec3(0.0);
                     float jitter = svHash(gl_FragCoord.xy + fract(sv_time) * 61.0) - 0.5;
-                    for (int i = 0; i < 12; i++) {
-                        float t = (float(i) + 0.5 + jitter) / 12.0 - 0.5;
+                    for (int i = 0; i < 32; i++) {
+                        if (float(i) >= sv_motionBlurSamples) break;
+                        float t = (float(i) + 0.5 + jitter) / sv_motionBlurSamples - 0.5;
                         blurred += svSampleCA(uv - v * t);
                     }
                     // add the streaks on top of whatever DoF made of this pixel
-                    col = max(col + blurred / 12.0 - base, vec3(0.0));
+                    col = max(col + blurred / sv_motionBlurSamples - base, vec3(0.0));
                 }
             }
         }
