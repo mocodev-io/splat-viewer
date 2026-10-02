@@ -35,7 +35,16 @@ declare module 'playcanvas/scripts/esm/camera-frame.mjs' {
             renderFormatFallback1: 'rgba8' | 'rg11b10' | 'rgba16' | 'rgba32';
             debug: 'none' | 'scene' | 'ssao' | 'bloom' | 'vignette' | 'dofcoc' | 'dofblur' | 'depth';
         };
-        dof: { enabled: boolean };
+        dof: {
+            enabled: boolean;
+            highQuality: boolean;
+            nearBlur: boolean;
+            focusDistance: number;
+            focusRange: number;
+            blurRadius: number;
+            blurRings: number;
+            blurRingPoints: number;
+        };
         bloom: { enabled: boolean; intensity: number; blurLevel: number; threshold: number };
         grading: { enabled: boolean; brightness: number; contrast: number; saturation: number; tint: Color };
         vignette: { enabled: boolean; intensity: number; inner: number; outer: number; curvature: number; color: Color };

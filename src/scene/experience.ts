@@ -100,9 +100,89 @@ export function sceneLighting(s: ExperienceSettings): Lighting {
     return mergeKnown(defaultLighting(), s.extras?.lighting);
 }
 
+// ---- our extras: the lens
+//
+// A physical camera instead of a field of view. The sensor width spans the
+// image width (like Blender's default sensor fit), so the horizontal angle
+// of view is 2·atan(sensorWidth / 2f). Distances are in meters; splats have
+// no scale of their own, so `metersPerUnit` says how big one scene unit is.
+
+export const SENSORS = {
+    'Full frame': [36, 24],
+    'Super 35': [24.89, 18.66],
+    'APS-C': [23.5, 15.6],
+    'Micro 4/3': [17.3, 13]
+} as const;
+export type SensorName = keyof typeof SENSORS | 'Custom';
+export const SENSOR_NAMES = [...Object.keys(SENSORS), 'Custom'] as SensorName[];
+
+export const BLUR_QUALITIES = ['low', 'medium', 'high'] as const;
+
+export type Lens = {
+    sensor: SensorName;
+    sensorWidth: number;         // mm
+    sensorHeight: number;        // mm
+    focalLength: number;         // mm
+    fStop: number;
+    focusDistance: number;       // m
+    metersPerUnit: number;
+    dof: boolean;
+    nearBlur: boolean;           // blur in front of the focus plane too
+    blurQuality: typeof BLUR_QUALITIES[number];
+};
+
+export const lensRanges = {
+    sensorWidth: { min: 1, max: 70, step: 0.01 },
+    sensorHeight: { min: 1, max: 70, step: 0.01 },
+    focalLength: { min: 8, max: 300, step: 1 },
+    fStop: { min: 0.95, max: 22, step: 0.05 },
+    focusDistance: { min: 0.05, max: 500, step: 0.01 },
+    metersPerUnit: { min: 0.001, max: 100, step: 0.001 }
+} as const;
+
+export const defaultLens = (): Lens => ({
+    sensor: 'Full frame',
+    sensorWidth: 36,
+    sensorHeight: 24,
+    focalLength: 35,
+    fStop: 2.8,
+    focusDistance: 3,
+    metersPerUnit: 1,
+    dof: false,
+    nearBlur: true,
+    blurQuality: 'medium'
+});
+
+const toDeg = (r: number) => r * 180 / Math.PI;
+const toRad = (d: number) => d * Math.PI / 180;
+
+/** Horizontal angle of view, degrees. */
+export const horizontalFov = (l: Lens) => toDeg(2 * Math.atan(l.sensorWidth / (2 * l.focalLength)));
+/** Vertical angle of view over the sensor's own height, degrees; what the v2 `fov` field gets. */
+export const verticalFov = (l: Lens) => toDeg(2 * Math.atan(l.sensorHeight / (2 * l.focalLength)));
+const focalForVerticalFov = (fov: number, sensorHeight: number) => sensorHeight / (2 * Math.tan(toRad(fov) / 2));
+
+const clamp = (v: number, r: { min: number; max: number }) => Math.min(Math.max(v, r.min), r.max);
+
+/**
+ * The lens of a scene: `extras.lens`, or for a file without one (from
+ * SuperSplat, say) the focal length that gives its camera's field of view.
+ */
+export function sceneLens(s: ExperienceSettings): Lens {
+    const lens = mergeKnown(defaultLens(), s.extras?.lens);
+    if (!SENSOR_NAMES.includes(lens.sensor)) lens.sensor = 'Custom';
+    if (lens.sensor !== 'Custom') [lens.sensorWidth, lens.sensorHeight] = SENSORS[lens.sensor];
+    if (!BLUR_QUALITIES.includes(lens.blurQuality)) lens.blurQuality = 'medium';
+    const fov = s.cameras[0]?.initial.fov;
+    if (!isObject(s.extras?.lens) && fov) lens.focalLength = focalForVerticalFov(fov, lens.sensorHeight);
+    for (const key of Object.keys(lensRanges) as (keyof typeof lensRanges)[]) {
+        lens[key] = clamp(lens[key], lensRanges[key]);
+    }
+    return lens;
+}
+
 // Authoring ranges from supersplat-viewer/src/schemas/ranges.ts
 export const ranges = {
-    fov: { min: 10, max: 120, step: 1 },
     sharpness: { amount: { min: 0, max: 1, step: 0.01 } },
     bloom: { intensity: { min: 0, max: 0.1, step: 0.01 }, blurLevel: { min: 1, max: 16, step: 1 } },
     grading: {

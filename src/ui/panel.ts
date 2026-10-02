@@ -1,6 +1,9 @@
 import { useEffect } from 'react';
 import { useControls, folder, button } from 'leva';
-import { ranges, TONEMAPPING, type ExperienceSettings, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
+import {
+    BLUR_QUALITIES, defaultLens, lensRanges, ranges, SENSOR_NAMES, SENSORS, TONEMAPPING,
+    type ExperienceSettings, type Lens, type PostEffectSettings, type SensorName, type Tonemapping, type Vec3Tuple
+} from '../scene/experience';
 import { ORIENTATIONS, type Orientation } from '../viewer/Splat';
 
 // colours: scene settings store 0..1 rgb, the panel edits hex
@@ -39,11 +42,42 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
     return { orientation: values.orientation as Orientation, set };
 }
 
-export function useCameraPanel() {
-    const [values, set] = useControls('Camera', () => ({
-        fov: { value: 60, ...ranges.fov, label: 'Field of view' }
-    }));
-    return { fov: values.fov, set };
+// The lens. A sensor preset fixes the sensor size; 'Custom' shows the fields.
+export function useLensPanel({ onFocusOrbit }: { onFocusOrbit: () => void }) {
+    const r = lensRanges;
+    const d = defaultLens();
+    const custom = (get: (path: string) => unknown) => get('Lens.sensor') === 'Custom';
+    const [v, set] = useControls('Lens', () => ({
+        sensor: { value: d.sensor, options: SENSOR_NAMES, label: 'Sensor' },
+        sensorWidth: { value: d.sensorWidth, ...r.sensorWidth, label: 'Width mm', render: custom },
+        sensorHeight: { value: d.sensorHeight, ...r.sensorHeight, label: 'Height mm', render: custom },
+        focalLength: { value: d.focalLength, ...r.focalLength, label: 'Focal length mm' },
+        fStop: { value: d.fStop, ...r.fStop, label: 'f-stop' },
+        focusDistance: { value: d.focusDistance, ...r.focusDistance, label: 'Focus m' },
+        'Focus on orbit point': button(() => onFocusOrbit()),
+        dof: { value: d.dof, label: 'Depth of field' },
+        nearBlur: { value: d.nearBlur, label: 'Near blur', render: get => get('Lens.dof') as boolean },
+        blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Blur quality', render: get => get('Lens.dof') as boolean },
+        metersPerUnit: { value: d.metersPerUnit, ...r.metersPerUnit, label: 'Meters / unit' }
+    }), [onFocusOrbit]);
+
+    const sensor = v.sensor as SensorName;
+    const [sensorWidth, sensorHeight] = sensor === 'Custom' ? [v.sensorWidth, v.sensorHeight] : SENSORS[sensor];
+    const lens: Lens = {
+        sensor, sensorWidth, sensorHeight,
+        focalLength: v.focalLength,
+        fStop: v.fStop,
+        focusDistance: v.focusDistance,
+        metersPerUnit: v.metersPerUnit,
+        dof: v.dof,
+        nearBlur: v.nearBlur,
+        blurQuality: v.blurQuality as Lens['blurQuality']
+    };
+
+    // puts a loaded or computed lens into the panel
+    const apply = (l: Partial<Lens>) => set(l);
+
+    return { lens, apply };
 }
 
 // Everything the scene settings file can hold about the look of the image.
@@ -132,12 +166,16 @@ export function useLookPanel() {
     };
 }
 
-// Checks for the depth principle: is the scene depth what we expect, and do
+export const DEBUG_VIEWS = ['image', 'depth', 'blur amount'] as const;
+export type DebugView = typeof DEBUG_VIEWS[number];
+
+// Checks: is the scene depth what we expect, how much blur does the lens
+// give where (the CoC: red behind the focus, green in front), and do
 // objects and splats cover each other correctly.
 export function useDebugPanel() {
     const [values] = useControls('Debug', () => ({
-        depthView: { value: false, label: 'Depth view' },
+        view: { value: 'image' as DebugView, options: [...DEBUG_VIEWS], label: 'View' },
         testObjects: { value: false, label: 'Test objects' }
     }), { collapsed: true });
-    return values;
+    return { view: values.view as DebugView, testObjects: values.testObjects };
 }

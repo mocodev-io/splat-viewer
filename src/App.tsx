@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FILLMODE_FILL_WINDOW, RESOLUTION_AUTO, type BoundingBox } from 'playcanvas';
 import { Application } from '@playcanvas/react';
 import {
-    defaultExperience, loadExperience, sceneLighting, sceneObjects, settingsUrlFor,
+    defaultExperience, loadExperience, sceneLens, sceneLighting, sceneObjects, settingsUrlFor, verticalFov,
     type CameraPose, type ExperienceSettings, type SceneObject
 } from './scene/experience';
 import { findSplats, splatUrl } from './scene/splats';
@@ -11,7 +11,7 @@ import { Splat } from './viewer/Splat';
 import { SceneLighting, SceneObjects } from './viewer/SceneObjects';
 import { ViewerCamera, type CameraApi, type ViewRequest } from './viewer/ViewerCamera';
 import { FrameStats } from './viewer/FrameStats';
-import { useCameraPanel, useDebugPanel, useLookPanel, useSplatPanel } from './ui/panel';
+import { useDebugPanel, useLensPanel, useLookPanel, useSplatPanel } from './ui/panel';
 
 type Framing = { pose: CameraPose; radius: number };
 
@@ -62,14 +62,22 @@ export function App() {
 
     useEffect(() => { findSplats().then(setSplats); }, []);
 
+    // focus where the camera orbits: its distance, in meters
+    const focusOrbit = useCallback(() => {
+        const v = cameraApi.current?.getView();
+        if (!v) return;
+        const { lens } = live.current.lensPanel;
+        live.current.lensPanel.apply({ focusDistance: v.distance * lens.metersPerUnit });
+    }, []);
+
     const look = useLookPanel();
-    const camera = useCameraPanel();
+    const lensPanel = useLensPanel({ onFocusOrbit: focusOrbit });
     const debug = useDebugPanel();
 
     // panel callbacks change identity every render; the handlers below read
     // the current ones through refs so they can stay stable
-    const live = useRef({ look, camera, experience, framing });
-    live.current = { look, camera, experience, framing };
+    const live = useRef({ look, lensPanel, experience, framing });
+    live.current = { look, lensPanel, experience, framing };
     const loadedRef = useRef(loaded);
     loadedRef.current = loaded;
 
@@ -81,6 +89,7 @@ export function App() {
         const result = await loadExperience(splatUrl(name));
         if (result.warning) console.warn(result.warning);
         live.current.look.apply(result.settings);
+        live.current.lensPanel.apply(sceneLens(result.settings));
         setExperience(result.settings);
         setFraming(null);
         setLoaded(name);
@@ -99,33 +108,35 @@ export function App() {
         if (pose) setView({ pose, id: Date.now() });
     }, []);
 
-    // the current look and view as Experience Settings v2; everything else in
-    // the loaded file (annotations, tracks, extras) is kept as it was
+    // the current look, view and lens as Experience Settings v2; everything
+    // else in the loaded file (annotations, tracks, other extras) is kept
     const save = useCallback(() => {
         const name = loadedRef.current;
-        const pose = cameraApi.current?.getPose();
-        if (!name || !pose) {
+        const v = cameraApi.current?.getView();
+        if (!name || !v) {
             setStatus('load a splat first');
             return;
         }
-        const { look, experience } = live.current;
+        const { look, lensPanel: { lens }, experience } = live.current;
+        // `fov` stays filled for SuperSplat; the lens is the real source
+        const pose: CameraPose = { position: v.position, target: v.target, fov: verticalFov(lens) };
         const out: ExperienceSettings = {
             ...experience,
             tonemapping: look.tonemapping,
             highPrecisionRendering: look.highPrecision,
             background: { color: look.background },
             postEffectSettings: look.postEffects,
-            cameras: [{ initial: pose }, ...experience.cameras.slice(1)]
+            cameras: [{ initial: pose }, ...experience.cameras.slice(1)],
+            extras: { ...experience.extras, lens }
         };
         download(settingsUrlFor(splatUrl(name)).split('/').pop()!, out);
         setStatus('settings saved (download) · put the file next to the splat');
     }, []);
 
     const onReady = useCallback((bounds: BoundingBox | null) => {
-        const { experience, camera } = live.current;
+        const { experience, lensPanel } = live.current;
         const saved = experience.cameras[0]?.initial;
-        const fit = frameBounds(bounds, camera.fov);
-        if (saved) camera.set({ fov: saved.fov });
+        const fit = frameBounds(bounds, verticalFov(lensPanel.lens));
         setFraming(fit);
         setView({ pose: saved ?? fit.pose, id: Date.now() });
         setStatus(saved ? 'view from settings' : '');
@@ -164,9 +175,9 @@ export function App() {
                 <SplatSetup />
                 <ViewerCamera
                     view={view}
-                    fov={camera.fov}
+                    lens={lensPanel.lens}
                     farClip={farClip}
-                    depthView={debug.depthView}
+                    debugView={debug.view}
                     api={cameraApi}
                     tonemapping={look.tonemapping}
                     highPrecision={look.highPrecision}

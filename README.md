@@ -2,7 +2,7 @@
 
 A self-hosted browser viewer for 3D Gaussian splats, built on
 [PlayCanvas React](https://developer.playcanvas.com/user-manual/react/).
-It is rebuilt from scratch in small steps; this is step 1, the basis.
+It is rebuilt from scratch in small steps.
 The first version lives in the git history (before commit "Clean restart").
 
 ## Run
@@ -35,9 +35,35 @@ writes, so a scene prepared there opens here with the same start camera,
 tone mapping, background and post effects. Without a settings file the
 viewer frames the splat itself.
 
-**Save settings** (Splat folder) downloads the current look and view as such
-a file, keeping anything else the loaded file had (annotations, tracks,
-extras). Put it next to the splat.
+**Save settings** (Splat folder) downloads the current look, view and lens as
+such a file, keeping anything else the loaded file had (annotations, tracks,
+other extras). Put it next to the splat.
+
+### The lens
+
+The camera is a physical one: sensor, focal length, f-stop and focus
+distance, no separate field of view.
+
+- **Sensor**: Full frame, Super 35, APS-C, Micro 4/3 or Custom. The sensor
+  width spans the image width (like Blender's default), so the angle of view
+  is `2·atan(sensor width / 2·focal length)`.
+- **Focus m** is in meters; **Focus on orbit point** sets it to the distance
+  of the point the camera orbits around.
+- **Depth of field** follows the thin-lens formula, the circle of confusion
+  `c = f² / (N·(S − f)) · |d − S| / d`, so f-stop, focal length and focus
+  distance act as on a real camera. **Near blur** blurs in front of the
+  focus plane too.
+- **Blur quality** caps the blur radius (low 1.2 %, medium 2.2 %, high 3.5 %
+  of the image height) at what the engine's blur can sample smoothly. A
+  long lens wide open hits that cap; that is the limit, not a fault.
+- **Meters / unit**: splats have no scale of their own, and the DoF needs
+  one. Measure something of known size in the scene (a door is about 2 m)
+  in scene units and divide: 2 m over 0.5 units gives 4.
+
+The lens is saved under `extras.lens`. The `fov` in `cameras` stays filled
+(the vertical angle over the sensor height) so SuperSplat still reads the
+file; a file without a lens, from SuperSplat say, gets the focal length
+that matches its `fov`.
 
 ### Objects in the scene
 
@@ -81,10 +107,11 @@ Our additions live under `extras`, which SuperSplat ignores:
   it a default ambient light and sun are used. The light has no effect on
   the splats.
 
-**Debug** (collapsed in the panel): *Depth view* shows the scene depth the
-effects work with, *Test objects* puts an opaque box and a glass sphere
-where the start view looks, to check how objects and splats cover each
-other.
+**Debug** (collapsed in the panel): *View* shows the image, the scene depth
+the effects work with, or the blur amount (the circle of confusion: red
+behind the focus plane, green in front of it, dark where it is sharp).
+*Test objects* puts an opaque box and a glass sphere where the start view
+looks, to check how objects and splats cover each other.
 
 ## Controls
 
@@ -101,7 +128,8 @@ src/
   viewer/SplatSetup.tsx    scene-wide splat settings
   viewer/Splat.tsx         one loaded splat; unmounting frees it
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
-  viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects)
+  viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
+  viewer/physicalDof.ts    thin-lens circle of confusion for the engine's DoF
   viewer/FrameStats.tsx    fps / status line
   ui/panel.ts              Leva panel
 ```
@@ -119,9 +147,8 @@ Principles this is built on:
 - **Scene data in a known format.** Experience Settings v2, with our own
   additions under `extras` (which SuperSplat ignores).
 
-Next steps, each small and with its own reference: labels as DOM overlays
-(the annotations already in Experience Settings v2), then the lens (focal
-length, f-stop, DoF).
+Next step, small and with its own reference: labels as DOM overlays (the
+annotations already in Experience Settings v2).
 
 Notes:
 
@@ -132,6 +159,11 @@ Notes:
 - A material that does not write scene depth but is rendered opaquely
   leaves a "far away" hole in the depth; transparency and `writeDepth`
   therefore always go together here.
+- The engine's DoF blurs along a straight ramp between two distances. Its
+  small CoC shader (`RenderPassCoC`, engine 2.23) is swapped for the
+  thin-lens formula; blur, near / far handling and quality stay the
+  engine's. This touches engine internals, which is why the engine version
+  is pinned.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post
   effects (SuperSplat keeps splats in gamma space), which is what physically
   based effects such as DoF and bloom expect.
@@ -153,6 +185,7 @@ npm run typecheck && npm run build
 - [PlayCanvas React](https://developer.playcanvas.com/user-manual/react/) and
   [its splat tutorial](https://developer.playcanvas.com/user-manual/gaussian-splatting/building/your-first-app/react/)
 - [CameraFrame API](https://api.playcanvas.com/engine/classes/CameraFrame.html)
+- [Circle of confusion (thin lens)](https://en.wikipedia.org/wiki/Circle_of_confusion)
 - [Splat depth for post effects (engine issue #7484)](https://github.com/playcanvas/engine/issues/7484)
 - [SuperSplat viewer](https://github.com/playcanvas/supersplat-viewer): settings schema in `src/schemas/`
 
