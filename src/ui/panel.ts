@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
-    BLUR_QUALITIES, defaultLens, FOCUS_MODES, lensRanges, ranges, SENSOR_NAMES, SENSORS, TONEMAPPING,
+    BLADE_COUNTS, BLUR_QUALITIES, defaultLens, FOCUS_MODES, lensRanges, ranges, SENSOR_NAMES, SENSORS, TONEMAPPING,
     type ExperienceSettings, type Lens, type PostEffectSettings, type SensorName, type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import { ORIENTATIONS, type Orientation } from '../viewer/Splat';
@@ -42,6 +42,8 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
     return { orientation: values.orientation as Orientation, set };
 }
 
+const bladeOptions = Object.fromEntries(BLADE_COUNTS.map(n => [n ? `${n} blades` : 'Round', n]));
+
 type LensPanelProps = {
     onAfCenter: () => void;
     onMeasure: () => void;
@@ -56,6 +58,8 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
     const d = defaultLens();
     const custom = (get: (path: string) => unknown) => get('Lens.sensor') === 'Custom';
     const auto = (get: (path: string) => unknown) => get('Lens.focusMode') === 'auto';
+    const dof = (get: (path: string) => unknown) => get('Lens.dof') as boolean;
+    const blades = (get: (path: string) => unknown) => (get('Lens.Bokeh.blades') as number) > 0;
     const [v, set] = useControls('Lens', () => ({
         sensor: { value: d.sensor, options: SENSOR_NAMES, label: 'Sensor' },
         sensorWidth: { value: d.sensorWidth, ...r.sensorWidth, label: 'Width mm', render: custom },
@@ -67,7 +71,15 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         afTransition: { value: d.afTransition, ...r.afTransition, label: 'AF transition s', render: auto },
         'AF center': button(() => onAfCenter()),
         dof: { value: d.dof, label: 'Depth of field' },
-        blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Still quality', render: get => get('Lens.dof') as boolean },
+        blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Still quality', render: dof },
+        // the bokeh shape; exact in the still, the quick DoF while moving stays round
+        Bokeh: folder({
+            blades: { value: d.blades as number, options: bladeOptions, label: 'Aperture' },
+            bladeRoundness: { value: d.bladeRoundness, ...r.bladeRoundness, label: 'Roundness', render: blades },
+            bladeRotation: { value: d.bladeRotation, ...r.bladeRotation, label: 'Rotation °', render: blades },
+            anamorphic: { value: d.anamorphic, ...r.anamorphic, label: 'Anamorphic' },
+            catsEye: { value: d.catsEye, ...r.catsEye, label: "Cat's eye" }
+        }, { collapsed: true, render: dof }),
         Scale: folder({
             metersPerUnit: { value: d.metersPerUnit, ...r.metersPerUnit, label: 'Meters / unit' },
             Measure: button(() => onMeasure()),
@@ -87,7 +99,12 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         afTransition: v.afTransition,
         metersPerUnit: v.metersPerUnit,
         dof: v.dof,
-        blurQuality: v.blurQuality as Lens['blurQuality']
+        blurQuality: v.blurQuality as Lens['blurQuality'],
+        blades: v.blades as Lens['blades'],
+        bladeRoundness: v.bladeRoundness,
+        bladeRotation: v.bladeRotation,
+        anamorphic: v.anamorphic,
+        catsEye: v.catsEye
     };
 
     // puts a loaded or computed lens into the panel

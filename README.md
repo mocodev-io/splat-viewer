@@ -71,6 +71,20 @@ distance, no separate field of view.
   shader).
 - **Still quality** is the number of aperture samples: low 16, medium 48,
   high 128. More samples give smoother bokeh and take longer to finish.
+- **Bokeh** (with DoF on) is the shape of the aperture the still is
+  rendered over, so the out-of-focus highlights take exactly that shape:
+  - **Aperture**: round, or a diaphragm of 5–9 blades with its corners on
+    the f-stop circle (as in Blender); **Roundness** bends the blades out
+    towards a circle (curved blades), **Rotation °** turns them;
+  - **Anamorphic** (1–2) squeezes the shape into an upright oval, the look
+    of an anamorphic lens;
+  - **Cat's eye** (0–1): towards the corners the lens barrel cuts part of
+    the aperture away (mechanical vignetting), so the bokeh there turns
+    into ovals along the circle around the centre, the "swirl" of lenses
+    like the Helios 44. It is exact per pixel; the corners get fewer
+    effective samples, so they are a little grainier at low quality.
+
+  The quick DoF while the camera moves stays round.
 - When nothing changes the viewer stops rendering: after the still is
   finished, or after a second without lens DoF. The HUD shows `idle`; any
   change (camera, panel, focus, window size) starts rendering again.
@@ -158,6 +172,7 @@ src/
   viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
   viewer/stillFrames.ts    accumulation buffer for the still DoF, presenting to the canvas
   viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
+  viewer/aperture.ts       aperture shapes (blades, anamorphic) and evenly spread lens points
   viewer/AutoFocus.tsx     continuous autofocus and the AF point
   viewer/ScenePointer.tsx  clicks in the image: AF point, measuring
   viewer/MeasureOverlay.tsx the measuring line

@@ -4,7 +4,8 @@ import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import type { Lens } from '../scene/experience';
-import { StillFrames, apertureSample } from './stillFrames';
+import { StillFrames } from './stillFrames';
+import { Aperture } from './aperture';
 
 /** Aperture samples per still, by quality. */
 export const STILL_SAMPLES = { low: 16, medium: 48, high: 128 } as const;
@@ -34,8 +35,8 @@ const smoothstep = (a: number, b: number, x: number) => {
 //   is on);
 // - still (nothing changed for a moment, lens DoF on): one aperture sample
 //   per frame until the quality's count, fading in over the last moving
-//   frame; the camera is moved over the aperture and its frustum sheared so
-//   the focus plane stays in place;
+//   frame; the camera is moved over the aperture (its shape gives the bokeh,
+//   aperture.ts) and its frustum sheared so the focus plane stays in place;
 // - done, or nothing changed for a second without lens DoF: no rendering at
 //   all until something changes (the canvas keeps the last image).
 //
@@ -47,7 +48,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         changedAt: 0,
         mode: 'moving' as Mode,
         start: false,
-        jitter: null as null | { x: number; y: number; focus: number }
+        jitter: null as null | { x: number; y: number; focus: number },
+        point: [0, 0] as [number, number],      // the lens point of this sample, units of the f-stop radius
+        aperture: null as Aperture | null
     });
     const live = useRef({ lens, focus, accumulate, busy, sceneKey });
     live.current = { lens, focus, accumulate, busy, sceneKey };
@@ -138,8 +141,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
             s.start = false;
         }
         const { lens, focus } = live.current;
-        const [u, v] = apertureSample(sf.count);
-        const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // aperture, scene units
+        if (!s.aperture?.is(lens)) s.aperture = new Aperture(lens);
+        const [u, v] = s.point = s.aperture.sample(sf.count);
+        const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
     });
 
@@ -148,7 +152,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         if (!sf) return;
         const s = state.current;
         if (s.mode === 'still') {
-            sf.accumulate();
+            sf.accumulate(s.point[0], s.point[1], live.current.lens.catsEye);
             sf.present(true, smoothstep(2, 10, sf.count));
             if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality]) {
                 s.mode = 'done';

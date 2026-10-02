@@ -118,6 +118,8 @@ export const SENSOR_NAMES = [...Object.keys(SENSORS), 'Custom'] as SensorName[];
 
 export const BLUR_QUALITIES = ['low', 'medium', 'high'] as const;
 export const FOCUS_MODES = ['manual', 'auto'] as const;
+/** Diaphragm blades; 0 is a round opening. */
+export const BLADE_COUNTS = [0, 5, 6, 7, 8, 9] as const;
 
 export type Lens = {
     sensor: SensorName;
@@ -131,6 +133,12 @@ export type Lens = {
     metersPerUnit: number;
     dof: boolean;
     blurQuality: typeof BLUR_QUALITIES[number];
+    // bokeh (aperture.ts)
+    blades: typeof BLADE_COUNTS[number];
+    bladeRoundness: number;      // 0 straight blades, 1 round
+    bladeRotation: number;       // degrees
+    anamorphic: number;          // horizontal squeeze, 1 spherical, 2 a 2x anamorphic
+    catsEye: number;             // 0 none, 1 strong: bokeh turns to tangential ovals towards the corners
 };
 
 export const lensRanges = {
@@ -140,7 +148,11 @@ export const lensRanges = {
     fStop: { min: 0.95, max: 22, step: 0.05 },
     focusDistance: { min: 0.1, max: 50, step: 0.01 },
     afTransition: { min: 0, max: 3, step: 0.05 },
-    metersPerUnit: { min: 0.001, max: 100, step: 0.001 }
+    metersPerUnit: { min: 0.001, max: 100, step: 0.001 },
+    bladeRoundness: { min: 0, max: 1, step: 0.01 },
+    bladeRotation: { min: 0, max: 180, step: 1 },
+    anamorphic: { min: 1, max: 2, step: 0.01 },
+    catsEye: { min: 0, max: 1, step: 0.01 }
 } as const;
 
 export const defaultLens = (): Lens => ({
@@ -154,7 +166,12 @@ export const defaultLens = (): Lens => ({
     afTransition: 0.5,
     metersPerUnit: 1,
     dof: false,
-    blurQuality: 'medium'
+    blurQuality: 'medium',
+    blades: 0,
+    bladeRoundness: 0,
+    bladeRotation: 0,
+    anamorphic: 1,
+    catsEye: 0
 });
 
 const toDeg = (r: number) => r * 180 / Math.PI;
@@ -178,6 +195,7 @@ export function sceneLens(s: ExperienceSettings): Lens {
     if (lens.sensor !== 'Custom') [lens.sensorWidth, lens.sensorHeight] = SENSORS[lens.sensor];
     if (!BLUR_QUALITIES.includes(lens.blurQuality)) lens.blurQuality = 'medium';
     if (!FOCUS_MODES.includes(lens.focusMode)) lens.focusMode = 'manual';
+    if (!BLADE_COUNTS.includes(lens.blades)) lens.blades = 0;
     const fov = s.cameras[0]?.initial.fov;
     if (!isObject(s.extras?.lens) && fov) lens.focalLength = focalForVerticalFov(fov, lens.sensorHeight);
     for (const key of Object.keys(lensRanges) as (keyof typeof lensRanges)[]) {
