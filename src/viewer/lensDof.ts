@@ -20,22 +20,25 @@ import type { BLUR_QUALITIES, Lens } from '../scene/experience';
 
 const composeDofGLSL = /* glsl */ `
     #ifdef DOF
-        // screenDepthPS declares the depth map too, for the depth debug view
+        // The depth debug view declares the depth map itself, further down in
+        // the compose shader; that view replaces the image anyway, so the
+        // lens stays out of it.
         #ifdef DEBUG_COMPOSE
             #if DEBUG_COMPOSE == depth
-                #define LENS_DEPTH_DECLARED
+                #define LENS_OFF
             #endif
         #endif
-        #ifndef LENS_DEPTH_DECLARED
-            uniform highp sampler2D uSceneDepthMap;
-        #endif
-
-        uniform vec3 lens_params;    // focus (scene units), c∞ (pixels, radius), max radius (pixels)
-        uniform vec4 lens_quality;   // samples, depth probes, depth format (1 linear, 2 reciprocal), far
 
         // read by the engine's debug views
         vec2 dCoc;
         vec3 dBlur;
+
+        #ifdef LENS_OFF
+            vec3 applyDof(vec3 base, vec2 uv) { return base; }
+        #else
+        uniform highp sampler2D uSceneDepthMap;
+        uniform vec3 lens_params;    // focus (scene units), c∞ (pixels, radius), max radius (pixels)
+        uniform vec4 lens_quality;   // samples, depth probes, depth format (1 linear, 2 reciprocal), far
 
         float lensDepth(vec2 uv) {
             float v = texture2DLod(uSceneDepthMap, uv, 0.0).r;
@@ -51,6 +54,29 @@ const composeDofGLSL = /* glsl */ `
             return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
         }
 
+        // The blur of this pixel itself. At a silhouette the splat depth is a
+        // coverage-weighted mix of the near and the far surface, and that mix
+        // can land right on the focus plane: a thin sharp outline around a
+        // blurred object. When the pixels around straddle the focus plane,
+        // this pixel is a mix of two surfaces and gets the smaller of their
+        // two blurs; an object that really is in focus keeps its crisp edge
+        // (its own blur is zero).
+        float lensCenterCoc(vec2 uv, float depth) {
+            float dMin = depth;
+            float dMax = depth;
+            for (int i = 0; i < 8; i++) {
+                float a = float(i) * 0.785398;
+                float d = lensDepth(uv + vec2(cos(a), sin(a)) * 3.0 * sceneTextureInvRes);
+                dMin = min(dMin, d);
+                dMax = max(dMax, d);
+            }
+            float size = lensCoc(depth);
+            if (dMin < lens_params.x && dMax > lens_params.x) {
+                size = max(size, min(lensCoc(dMin), lensCoc(dMax)));
+            }
+            return size;
+        }
+
         // Scatter-as-gather on a golden-angle spiral: a sample counts when its
         // own blur circle reaches this pixel. A blurred foreground therefore
         // spills over a sharp background, while background behind a sharp
@@ -58,8 +84,7 @@ const composeDofGLSL = /* glsl */ `
         vec3 applyDof(vec3 base, vec2 uv) {
             float maxR = lens_params.z;
             float centerDepth = lensDepth(uv);
-            float centerSize = lensCoc(centerDepth);
-            dCoc = centerDepth > lens_params.x ? vec2(centerSize / maxR, 0.0) : vec2(0.0, centerSize / maxR);
+            float centerSize = lensCenterCoc(uv, centerDepth);
             dBlur = base;
 
             // each pixel turns its pattern by its own angle: fine noise
@@ -82,8 +107,14 @@ const composeDofGLSL = /* glsl */ `
                     reach = max(reach, mix(reach, size, smoothstep(r * 0.5, r, size)));
                 }
             }
-            if (reach < 0.25) return base;
             reach = min(reach, maxR);
+
+            // the debug view shows the blur this pixel really gets: red behind
+            // the focus plane, green in front of it (or spilled over from it)
+            float amount = reach / maxR;
+            dCoc = centerDepth > lens_params.x && reach <= centerSize + 0.5 ? vec2(amount, 0.0) : vec2(0.0, amount);
+
+            if (reach < 0.25) return base;
 
             // samples spread evenly over the disc of that reach
             vec3 color = base;
@@ -107,6 +138,7 @@ const composeDofGLSL = /* glsl */ `
             // fades in over the first pixel of blur instead of switching on
             return mix(base, dBlur, smoothstep(0.25, 1.25, reach));
         }
+        #endif
     #endif
 `;
 

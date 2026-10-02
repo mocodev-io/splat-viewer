@@ -121,8 +121,9 @@ Our additions live under `extras`, which SuperSplat ignores:
   the splats.
 
 **Debug** (collapsed in the panel): *View* shows the image, the scene depth
-the effects work with, or the blur amount (the circle of confusion: red
-behind the focus plane, green in front of it, dark where it is sharp).
+the effects work with, or the blur each pixel gets (red behind the focus
+plane, green in front of it or spilled over from it, dark where it is
+sharp).
 *Test objects* puts an opaque box and a glass sphere where the start view
 looks, to check how objects and splats cover each other.
 
@@ -182,6 +183,10 @@ Notes:
   only for the scene depth and that hook, with its own blur passes at their
   cheapest. When bumping the engine, check that chunk still has the same
   place in the compose shader.
+- At a silhouette the splat depth is a coverage-weighted mix of the near and
+  the far surface, which can land exactly on the focus plane. The DoF looks
+  at the depth around such pixels, so a blurred object does not get a thin
+  sharp outline.
 - A new engine `Picker` returns a wrong point for its very first pick (seen
   with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post
