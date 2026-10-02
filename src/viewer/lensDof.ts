@@ -43,9 +43,22 @@ const composeDofGLSL = /* glsl */ `
         uniform vec4 lens_quality;   // samples, depth probes, depth format (1 linear, 2 reciprocal), far
         uniform float lens_view;     // normalized depth view: 0 off, 1 linear, 2 inverse
 
+        // The splat scene depth holds, per pixel, the coverage-weighted sum of
+        // 1 / depth of the splats, plus the uncovered rest (1 - A) times the
+        // value it was cleared to, 1 / far. The scene alpha is that coverage
+        // A (the camera clears it to 0, and splats blend it premultiplied like
+        // their colour), so the rest can be taken off again and the sum
+        // divided by A: the depth of what is actually there, also at a soft
+        // splat edge against empty space. Without alpha in the scene format
+        // A reads 1 and this is the plain average.
         float lensDepth(vec2 uv) {
             float v = texture2DLod(uSceneDepthMap, uv, 0.0).r;
-            if (lens_quality.z > 1.5) return v > 0.0 ? 1.0 / v : lens_quality.w;
+            if (lens_quality.z > 1.5) {
+                float far = lens_quality.w;
+                float a = texture2DLod(sceneTexture, uv, 0.0).a;
+                float s = v - (1.0 - a) / far;
+                return a > 0.01 && s > 1e-7 ? min(a / s, far) : far;
+            }
             return v;
         }
 

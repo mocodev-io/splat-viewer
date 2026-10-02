@@ -223,14 +223,27 @@ Notes:
   passes reading the scene texture); check them when bumping the engine.
   Each aperture sample is a full render: quality is a trade between
   smoothness and time.
-- Splat edges are soft, and the depth there is a coverage-weighted mix of
-  the near and the far surface that only reaches the object's real depth
-  some pixels in; it can also land exactly on the focus plane. The DoF
-  therefore spreads the blur of a nearer object over that band (about 1 %
-  of the image height), so its soft rim blurs with it instead of leaving a
-  sharp, dark seam. An object in focus has no blur to spread and keeps a
-  crisp edge. Dividing the depth by the coverage would fix this at the
-  source, but needs the image's alpha (High precision only); not done yet.
+- Splat edges are soft. The splat scene depth is accumulated with the same
+  premultiplied blending as the colour: per pixel the coverage-weighted
+  sum of 1 / depth, plus the uncovered rest times the value it is cleared
+  to (1 / far clip). Left like that, a soft edge against empty space is
+  dragged towards the far clip. The camera therefore clears the scene
+  alpha to 0, so the alpha ends up as the coverage A, and the DoF takes the
+  rest off again and divides by A: `depth = A / (stored − (1 − A) / far)`.
+  The rim of an object then has the object's own depth up to where its
+  coverage runs out, against empty space as well as in front of something.
+  That needs an image format with alpha, so with lens DoF on the scene
+  renders in rgba16 (as with **High precision**); rg11b10 has no alpha,
+  reads as full coverage and gives the plain average. Glass objects change
+  the alpha without writing depth, so the depth behind glass is a little
+  off. Autofocus and measuring use the engine's picker, which renders its
+  own pass, so they are not affected.
+- Where a soft edge lies in front of something, its depth is a mix of the
+  two surfaces and can land exactly on the focus plane. The quick DoF
+  therefore also spreads the blur of a nearer object over a band of about
+  1 % of the image height, so its soft rim blurs with it instead of leaving
+  a sharp, dark seam. An object in focus has no blur to spread and keeps a
+  crisp edge.
 - A new engine `Picker` returns a wrong point for its very first pick (seen
   with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post

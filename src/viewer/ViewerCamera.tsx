@@ -113,8 +113,10 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         cc.reset(new Vec3(view.pose.target), new Vec3(view.pose.position));
     }, [view]);
 
-    // the Camera component takes colours as hex strings
-    const clearColor = '#' + background.map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+    // the Camera component takes colours as hex strings; alpha 0, so the scene
+    // alpha ends up as the coverage of what was drawn (lensDof.ts uses it to
+    // correct the splat depth at soft edges)
+    const clearColor = '#' + background.map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('') + '00';
 
     // post effects, mapped like SuperSplat's applyPostEffectSettings
     useEffect(() => {
@@ -123,7 +125,8 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         const pe = postEffects;
         cf.rendering.samples = 1;   // splat depth (and splats in general) want no MSAA
         cf.rendering.toneMapping = tonemapping === 'none' ? 'linear' : tonemapping;
-        cf.rendering.renderFormat = highPrecision ? 'rgba16' : 'rg11b10';
+        // the lens DoF needs the scene alpha (the coverage), which rg11b10 has not
+        cf.rendering.renderFormat = highPrecision || lens.dof ? 'rgba16' : 'rg11b10';
         cf.rendering.sharpness = pe.sharpness.enabled ? pe.sharpness.amount : 0;
 
         cf.bloom.enabled = pe.bloom.enabled;
@@ -144,7 +147,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
 
         cf.fringing.enabled = pe.fringing.enabled;
         cf.fringing.intensity = pe.fringing.intensity;
-    }, [tonemapping, highPrecision, postEffects]);
+    }, [tonemapping, highPrecision, postEffects, lens.dof]);
 
     // The lens: depth of field (lensDof.ts) and the debug views. The engine's
     // DoF provides the scene depth and the compose hook, so the debug views

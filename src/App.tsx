@@ -236,7 +236,7 @@ export function App() {
         <>
             <Application
                 className="viewport"
-                graphicsDeviceOptions={{ antialias: false }}
+                graphicsDeviceOptions={{ antialias: false, alpha: false }}
                 fillMode={FILLMODE_FILL_WINDOW}
                 resolutionMode={RESOLUTION_AUTO}
             >
