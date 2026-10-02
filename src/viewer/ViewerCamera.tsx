@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { Color, Vec3 } from 'playcanvas';
 import { Entity } from '@playcanvas/react';
 import { Camera, Script } from '@playcanvas/react/components';
@@ -8,9 +8,17 @@ import type { CameraPose, PostEffectSettings, Tonemapping, Vec3Tuple } from '../
 
 export type ViewRequest = { pose: CameraPose; id: number };
 
+export type CameraApi = {
+    /** Where the camera is and what it looks at, for saving the view. */
+    getPose: () => CameraPose;
+};
+
 type ViewerCameraProps = {
     view: ViewRequest | null;             // a new id moves the camera there
     fov: number;                          // vertical, degrees
+    farClip: number;
+    depthView: boolean;                   // show the scene depth instead of the image
+    api: RefObject<CameraApi | null>;
     tonemapping: Tonemapping;
     highPrecision: boolean;
     postEffects: PostEffectSettings;
@@ -19,9 +27,25 @@ type ViewerCameraProps = {
 
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings.
-export function ViewerCamera({ view, fov, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
+export function ViewerCamera({ view, fov, farClip, depthView, api, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
+
+    useEffect(() => {
+        api.current = {
+            getPose: () => {
+                const cc = controls.current!;
+                const entity = cc.entity;
+                const p = entity.getPosition();
+                // CameraControls keeps its orbit distance privately; the
+                // target is that far along the view direction
+                const distance = (cc as unknown as { _pose?: { distance?: number } })._pose?.distance || 1;
+                const t = entity.forward.clone().mulScalar(distance).add(p);
+                return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z], fov: entity.camera!.fov };
+            }
+        };
+        return () => { api.current = null; };
+    }, [api]);
 
     // move to a requested pose; CameraControls animates there
     useEffect(() => {
@@ -61,11 +85,17 @@ export function ViewerCamera({ view, fov, tonemapping, highPrecision, postEffect
 
         cf.fringing.enabled = pe.fringing.enabled;
         cf.fringing.intensity = pe.fringing.intensity;
-    }, [tonemapping, highPrecision, postEffects]);
+
+        // The engine renders the scene depth only for an effect that reads it.
+        // For the depth view, DoF is that reader; the debug output replaces
+        // the image anyway, so its blur never shows.
+        cf.dof.enabled = depthView;
+        cf.rendering.debug = depthView ? 'depth' : 'none';
+    }, [tonemapping, highPrecision, postEffects, depthView]);
 
     return (
         <Entity name="camera" position={[0, 1, 4]}>
-            <Camera fov={fov} clearColor={clearColor} nearClip={0.01} farClip={1000} />
+            <Camera fov={fov} clearColor={clearColor} nearClip={0.01} farClip={farClip} />
             <Script script={CameraControls} ref={controls} />
             <Script script={CameraFrame} ref={frame} />
         </Entity>

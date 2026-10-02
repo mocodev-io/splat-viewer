@@ -16,18 +16,20 @@ type SplatPanelProps = {
     onLoad: (name: string) => void;
     onUnload: () => void;
     onResetView: () => void;
+    onSave: () => void;
 };
 
 // Splat choice and camera. Loading is always an explicit button press.
-export function useSplatPanel({ splats, onLoad, onUnload, onResetView }: SplatPanelProps) {
+export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }: SplatPanelProps) {
     const [values, set] = useControls('Splat', () => ({
         file: { value: splats[0] ?? '', options: splats, label: 'File' },
         orientation: { value: 'x180' as Orientation, options: [...ORIENTATIONS], label: 'Orientation' },
         // read inside the handlers through `get`, so the buttons see the current choice
         Load: button(get => onLoad(get('Splat.file') as string)),
         Unload: button(() => onUnload()),
-        'Reset view': button(() => onResetView())
-    }), [splats, onLoad, onUnload, onResetView]);
+        'Reset view': button(() => onResetView()),
+        'Save settings': button(() => onSave())
+    }), [splats, onLoad, onUnload, onResetView, onSave]);
 
     // the list arrives after the panel exists; pick its first entry then
     useEffect(() => {
@@ -128,4 +130,14 @@ export function useLookPanel() {
         postEffects,
         apply
     };
+}
+
+// Checks for the depth principle: is the scene depth what we expect, and do
+// objects and splats cover each other correctly.
+export function useDebugPanel() {
+    const [values] = useControls('Debug', () => ({
+        depthView: { value: false, label: 'Depth view' },
+        testObjects: { value: false, label: 'Test objects' }
+    }), { collapsed: true });
+    return values;
 }

@@ -38,6 +38,68 @@ export type ExperienceSettings = {
     extras?: Record<string, unknown>;
 };
 
+// ---- our extras: 3D objects and the light they need
+
+export const OBJECT_TYPES = ['box', 'sphere', 'cylinder', 'cone', 'capsule', 'plane', 'torus'] as const;
+export type ObjectType = typeof OBJECT_TYPES[number];
+
+export type SceneObject = {
+    id: string;
+    type: ObjectType;
+    position: Vec3Tuple;
+    rotation: Vec3Tuple;         // euler, degrees
+    scale: Vec3Tuple;
+    material: {
+        color: Vec3Tuple;        // 0..1 rgb
+        opacity: number;         // 1 = opaque
+        emissive: Vec3Tuple;
+        metalness: number;
+        gloss: number;
+        // Write into the scene depth that DoF, fog and SSAO read. Opaque
+        // objects do by default; transparent ones don't (engine default), so
+        // depth effects look through them to the splats behind.
+        writeDepth?: boolean;
+    };
+};
+
+// Splats are unlit, objects are lit: without light they render black.
+export type Lighting = {
+    ambient: { color: Vec3Tuple; intensity: number };
+    sun: { color: Vec3Tuple; intensity: number; yaw: number; pitch: number };
+};
+
+export const defaultLighting = (): Lighting => ({
+    ambient: { color: [1, 1, 1], intensity: 0.35 },
+    sun: { color: [1, 0.96, 0.9], intensity: 1.2, yaw: 30, pitch: -45 }
+});
+
+const defaultObject = (): SceneObject => ({
+    id: '',
+    type: 'box',
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    material: { color: [0.8, 0.8, 0.8], opacity: 1, emissive: [0, 0, 0], metalness: 0, gloss: 0.4 }
+});
+
+export function sceneObjects(s: ExperienceSettings): SceneObject[] {
+    const list = s.extras?.objects;
+    if (!Array.isArray(list)) return [];
+    return list.flatMap((raw, i) => {
+        if (!isObject(raw) || !OBJECT_TYPES.includes(raw.type as ObjectType)) return [];
+        const obj = mergeKnown(defaultObject(), raw);
+        if (isObject(raw.material) && typeof raw.material.writeDepth === 'boolean') {
+            obj.material.writeDepth = raw.material.writeDepth;
+        }
+        obj.id = typeof raw.id === 'string' && raw.id ? raw.id : `object-${i}`;
+        return [obj];
+    });
+}
+
+export function sceneLighting(s: ExperienceSettings): Lighting {
+    return mergeKnown(defaultLighting(), s.extras?.lighting);
+}
+
 // Authoring ranges from supersplat-viewer/src/schemas/ranges.ts
 export const ranges = {
     fov: { min: 10, max: 120, step: 1 },
