@@ -72,14 +72,25 @@ distance, no separate field of view.
 - The still starts as soon as the image stops moving: the camera counts
   as still when the image shifts less than 0.1 px from one frame to the
   next, so the eased-out tail of the camera controls does not hold it up
-  (it starts over once the image drifts more than half a pixel). The few
-  samples of the first frames would show as separate copies, stepped lines
-  along sharp edges, so the average gets an *over-blur* on top, as in
-  Blender EEVEE: the quick DoF with each blur circle scaled to 1.5 / √n
-  after n samples (at most the full blur), about the gap between the lens
-  points. The image refines smoothly from the moving view to the exact
-  one; a little of it stays in the finished still (0.2 of the blur at
-  medium), which softens bokeh edges slightly.
+  (it starts over once the image drifts more than half a pixel). Three
+  things keep the build-up calm:
+  - the lens points come in mirrored pairs and the still is shown after
+    each whole pair, so they always average out at the centre of the lens
+    and an out-of-focus object stays in its place instead of wandering by
+    up to its blur radius while samples come in;
+  - an *over-blur* on top of the average, as in Blender EEVEE: the quick
+    DoF with each blur circle scaled to 1.5 / √n after n samples (at most
+    the full blur), about the gap between the lens points, so a few
+    samples do not show as stepped copies along sharp edges. A little of
+    it stays in the finished still (0.2 of the blur at medium), which
+    softens bokeh edges slightly;
+  - the over-blur uses the depth of the last moving frame (kept every
+    frame), not the depth of each aperture sample, which is shifted with
+    its lens point and would make the over-blur shake.
+- The quick DoF turns its sample pattern per pixel (interleaved gradient
+  noise), so a large blur shows a fine grain rather than stepped lines,
+  and reaches up to 6 % of the image height, close to what the still
+  shows.
 - **Still quality** is the number of aperture samples: low 16, medium 48,
   high 128. More samples give smoother bokeh and take longer to finish.
 - **Bokeh** (with DoF on) is the shape of the aperture the still is

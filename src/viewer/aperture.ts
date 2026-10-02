@@ -16,6 +16,13 @@
 // Any first n points cover the aperture evenly, so the still looks right
 // early and only gets smoother.
 //
+// The points come in mirrored pairs: point 2k + 1 is point 2k through the
+// centre (the opposite corner of the square, which the concentric map turns
+// into the opposite point of the disc). After every pair the lens points
+// average out at the centre, so the still, shown after each pair, does not
+// wander: with a lopsided few points an out-of-focus object would sit off
+// its place by up to its blur radius and drift back as samples come in.
+//
 // Each shape is a star shape around the centre with its edge at distance
 // b(θ). A disc point (ρ, α) goes to angle θ = F⁻¹(α / 2π), where F is the
 // cumulative distribution of b(θ)², and radius ρ · b(θ): that is uniform over
@@ -76,17 +83,25 @@ export class Aperture {
 
     /** Point i of the sequence, in units of the f-stop radius (x right, y up). */
     sample(i: number): [number, number] {
-        const [rho, alpha] = concentric((0.5 + R2[0] * i) % 1, (0.5 + R2[1] * i) % 1);
-        const v = alpha / (2 * Math.PI);
+        // the R2 sequence's own first point is the centre; start one further
+        const k = (i >> 1) + 1;
+        let u = (0.5 + R2[0] * k) % 1;
+        let v = (0.5 + R2[1] * k) % 1;
+        if (i & 1) {
+            u = 1 - u;
+            v = 1 - v;
+        }
+        const [rho, alpha] = concentric(u, v);
+        const t = alpha / (2 * Math.PI);
         // invert the angle distribution: find the bin, interpolate within it
         let lo = 0;
         let hi = TABLE;
         while (hi - lo > 1) {
             const mid = (lo + hi) >> 1;
-            if (this.cdf[mid] <= v) lo = mid; else hi = mid;
+            if (this.cdf[mid] <= t) lo = mid; else hi = mid;
         }
         const span = this.cdf[lo + 1] - this.cdf[lo];
-        const theta = (lo + (span > 0 ? (v - this.cdf[lo]) / span : 0.5)) / TABLE * 2 * Math.PI;
+        const theta = (lo + (span > 0 ? (t - this.cdf[lo]) / span : 0.5)) / TABLE * 2 * Math.PI;
         const r = rho * edge(this.shape, theta);
         return [r * Math.cos(theta) / this.shape.anamorphic, r * Math.sin(theta)];
     }

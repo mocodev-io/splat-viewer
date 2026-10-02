@@ -180,7 +180,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
         const blur = lens.dof || debugView === 'blur amount' ? still.current.overblur : 0;
-        updateLensDof(app, cf, lens, focus.current, blur, still.current.mode !== 'moving', depthView);
+        updateLensDof(app, cf, lens, focus.current, blur, depthView);
     });
 
     return (

@@ -107,8 +107,7 @@ const composeDofGLSL = /* glsl */ `
         }
 
         // Each pixel gathers samples spread evenly over a disc (golden-angle
-        // spiral, the same pattern for every pixel, so the blur is smooth
-        // rather than grainy) and sorts them into two layers:
+        // spiral, turned by a per-pixel angle) and sorts them into two layers:
         //
         // - its own surface and what lies behind it: a sample counts when its
         //   blur circle reaches this pixel (background behind a sharper edge
@@ -140,11 +139,18 @@ const composeDofGLSL = /* glsl */ `
             // the soft-edge band (lens_params.w) reaches, since the depth at a
             // splat's soft rim only gets to the object's real depth some
             // pixels in.
+            // Every pixel turns the sample pattern by its own angle
+            // (interleaved gradient noise, Jimenez 2014): with one pattern for
+            // all pixels, too few samples for a large blur show as copies,
+            // stepped lines along sharp edges; turned per pixel, the same
+            // error becomes a fine, even grain.
+            float turn = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+
             float reach = centerSize;
             for (int i = 0; i < 32; i++) {
                 if (float(i) >= lens_quality.y) break;
                 float r = maxR * (float(i) + 0.5) / lens_quality.y;
-                float a = float(i) * 2.39996323;
+                float a = float(i) * 2.39996323 + turn;
                 float d = lensDepth(uv + vec2(cos(a), sin(a)) * r * sceneTextureInvRes);
                 if (d < centerDepth) {
                     float size = lensCoc(d);
@@ -164,7 +170,7 @@ const composeDofGLSL = /* glsl */ `
             float nearCover = 0.0;
             float nearSize = 0.0;
             float area = reach * reach / lens_quality.x;      // disc area per sample, over pi
-            float angle = 0.0;
+            float angle = turn;
             for (int i = 0; i < 256; i++) {
                 if (float(i) >= lens_quality.x) break;
                 float radius = reach * sqrt((float(i) + 0.5) / lens_quality.x);
@@ -257,21 +263,16 @@ export type DepthView = 0 | 1 | 2;
 // over-blur while a still is accumulated over the aperture (useStillDof.ts),
 // so it has one fixed setting: samples,
 // depth probes and the largest blur radius as a fraction of the image height.
-const GATHER = { samples: 32, probes: 16, maxBlur: 0.025 };
-// The over-blur on a still is a fraction of the full blur, but that fraction
-// of a strongly blurred foreground is still more than the moving limit; one
-// frame of a larger radius costs the same number of samples.
-const OVERBLUR_MAX = 0.08;
+const GATHER = { samples: 48, probes: 16, maxBlur: 0.06 };
 
 /**
  * Sets the engine's DoF to its cheapest (it only has to provide the scene
  * depth and the compose hook) and the lens uniforms for this frame.
  * `focus` in meters; `blur` scales every blur circle: 1 for the lens, less
  * for the over-blur on a still being accumulated (useStillDof.ts), 0 keeps
- * the image sharp (debug views); `still` allows the over-blur its larger
- * radius limit.
+ * the image sharp (debug views).
  */
-export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, still: boolean, view: DepthView) {
+export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, view: DepthView) {
     const dof = cf.dof;
     dof.highQuality = false;
     dof.nearBlur = false;
@@ -291,8 +292,7 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const scope = device.scope;
     // the soft rim of splat edges, roughly a percent of the image height
     const edgeBand = 0.01 * device.height;
-    const maxBlur = still ? OVERBLUR_MAX : q.maxBlur;
-    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, maxBlur * device.height, edgeBand]);
+    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, q.maxBlur * device.height, edgeBand]);
     scope.resolve('lens_quality').setValue([q.samples, q.probes, reciprocal ? 2 : 1, camera.farClip]);
     scope.resolve('lens_view').setValue(view);
 }

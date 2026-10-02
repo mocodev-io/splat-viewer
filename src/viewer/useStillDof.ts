@@ -179,8 +179,8 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         const engine = (frame.current as unknown as { engineCameraFrame?: { renderPassCamera: unknown } } | null)?.engineCameraFrame;
         if (s.mode !== 'still') {
             // done: a stray render still shows the finished average
-            sf.prepare(engine, s.mode === 'done', null);
-            s.overblur = s.mode === 'done' ? Math.min(OVERBLUR / Math.sqrt(Math.max(sf.count, 1)), 1) : 1;
+            sf.prepare(engine, s.mode === 'done', null, live.current.accumulate);
+            s.overblur = s.mode === 'done' ? Math.min(OVERBLUR / Math.sqrt(Math.max(sf.shown, 1)), 1) : 1;
             return;
         }
         if (s.start) {
@@ -192,9 +192,10 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         const [u, v] = s.aperture.sample(sf.count);
         const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
-        sf.prepare(engine, true, [u, v, lens.catsEye]);
-        // the average composed this frame holds count + 1 samples
-        s.overblur = Math.min(OVERBLUR / Math.sqrt(sf.count + 1), 1);
+        sf.prepare(engine, true, [u, v, lens.catsEye], false);
+        // the average composed this frame shows the whole pairs among count + 1 samples
+        const shown = (sf.count + 1) - (sf.count + 1) % 2;
+        s.overblur = Math.min(OVERBLUR / Math.sqrt(Math.max(shown, 1)), 1);
     });
 
     useAppEvent('postrender', () => {
@@ -202,9 +203,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         if (!sf) return;
         const s = state.current;
         if (s.mode === 'still') {
-            // a short fade: with the over-blur the first sample already looks
-            // much like the moving frame it follows
-            sf.present(true, Math.min(sf.count / 2, 1));
+            // the still shows from the first whole pair on; with the over-blur
+            // it already looks much like the moving frame it follows
+            sf.present(true, sf.shown >= 2 ? 1 : 0);
             if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality]) {
                 s.mode = 'done';
                 app.autoRender = false;
