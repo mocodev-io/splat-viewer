@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { Mat4, Quat, Vec3, type AppBase } from 'playcanvas';
+import { Mat4, Quat, Vec3, type AppBase, type Texture } from 'playcanvas';
 import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
@@ -19,6 +19,7 @@ type StillDofOptions = {
     lens: Lens;
     focus: RefObject<number>;            // m
     accumulate: boolean;                 // lens DoF on and the normal image shown
+    depthRange: boolean;                 // the normalized depth view is shown: follow the depth range
     busy: boolean;                       // a splat is loading: keep rendering
     sceneKey: string;                    // changes whenever what is shown changes
     progress: RefObject<string>;         // short status for the HUD
@@ -60,9 +61,10 @@ const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
 // - done, or nothing changed for a second without lens DoF: no rendering at
 //   all until something changes (the canvas keeps the last image).
 //
-// Returns the state: the mode, and `overblur`, the gather radius scale for
-// this frame (1 while moving).
-export function useStillDof({ app, controls, frame, lens, focus, accumulate, busy, sceneKey, progress }: StillDofOptions) {
+// Returns the state: the mode, `overblur`, the gather radius scale for this
+// frame (1 while moving), and `range`, the depth range for the normalized
+// depth view.
+export function useStillDof({ app, controls, frame, lens, focus, accumulate, depthRange, busy, sceneKey, progress }: StillDofOptions) {
     const still = useRef<StillFrames | null>(null);
     const state = useRef({
         other: '',                                   // everything but the camera pose that changes the image
@@ -72,11 +74,12 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         prev: pose(),                                // the pose of the previous tick
         anchor: pose(),                              // the pose the still started at
         overblur: 1,
+        range: null as null | { texture: Texture; ready: boolean },   // for the normalized depth view
         jitter: null as null | { x: number; y: number; focus: number },
         aperture: null as Aperture | null
     });
-    const live = useRef({ lens, focus, accumulate, busy, sceneKey });
-    live.current = { lens, focus, accumulate, busy, sceneKey };
+    const live = useRef({ lens, focus, accumulate, depthRange, busy, sceneKey });
+    live.current = { lens, focus, accumulate, depthRange, busy, sceneKey };
 
     useEffect(() => {
         const cc = controls.current;
@@ -177,9 +180,13 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         s.jitter = null;
         // the engine CameraFrame behind the script (not in its types)
         const engine = (frame.current as unknown as { engineCameraFrame?: { renderPassCamera: unknown } } | null)?.engineCameraFrame;
+        const camera = controls.current?.entity.camera;
+        const reciprocal = !!(camera as unknown as { shaderParams?: { sceneDepthMapReciprocal: boolean } } | undefined)?.shaderParams?.sceneDepthMapReciprocal;
+        const range = live.current.depthRange && camera ? { far: camera.farClip, reciprocal } : null;
+        s.range = sf.range;
         if (s.mode !== 'still') {
             // done: a stray render still shows the finished average
-            sf.prepare(engine, s.mode === 'done', null, live.current.accumulate);
+            sf.prepare(engine, s.mode === 'done', null, live.current.accumulate, range);
             s.overblur = s.mode === 'done' ? Math.min(OVERBLUR / Math.sqrt(Math.max(sf.shown, 1)), 1) : 1;
             return;
         }
@@ -192,7 +199,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         const [u, v] = s.aperture.sample(sf.count);
         const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
-        sf.prepare(engine, true, [u, v, lens.catsEye], false);
+        sf.prepare(engine, true, [u, v, lens.catsEye], false, range);
         // the average composed this frame shows the whole pairs among count + 1 samples
         const shown = (sf.count + 1) - (sf.count + 1) % 2;
         s.overblur = Math.min(OVERBLUR / Math.sqrt(Math.max(shown, 1)), 1);

@@ -87,10 +87,13 @@ distance, no separate field of view.
   - the over-blur uses the depth of the last moving frame (kept every
     frame), not the depth of each aperture sample, which is shifted with
     its lens point and would make the over-blur shake.
-- The quick DoF turns its sample pattern per pixel (interleaved gradient
-  noise), so a large blur shows a fine grain rather than stepped lines,
-  and reaches up to 6 % of the image height, close to what the still
-  shows.
+- The quick DoF while moving keeps a smooth sample pattern and a blur of
+  at most 2.5 % of the image height: a larger radius with a single-pass
+  gather makes the blur heavy and lets the sharp outline of a blurred
+  foreground show through. The over-blur on a still may reach 8 % and turns
+  its sample pattern per pixel (interleaved gradient noise), so its large
+  radius shows a fine grain that the averaged still hardly shows, rather
+  than stepped lines.
 - **Still quality** is the number of aperture samples: low 16, medium 48,
   high 128. More samples give smoother bokeh and take longer to finish.
 - **Bokeh** (with DoF on) is the shape of the aperture the still is
@@ -166,12 +169,15 @@ Our additions live under `extras`, which SuperSplat ignores:
 **Debug** (collapsed in the panel): *View* shows the image, the scene depth
 the effects work with, or the blur each pixel gets (red behind the focus
 plane, green in front of it or spilled over from it, dark where it is
-sharp). *Depth range* sets how the depth view shows depth: *camera
+sharp; white is a blur of 2.5 % of the image height). *Depth range* sets
+how the depth view shows depth: *camera
 near/far* is the engine's view (linear from the near to the far clip, so a
 room only uses a small part of the grey scale); *scene linear* and *scene
 inverse* normalize it from the nearest to the farthest depth in the image
 (z-depth normalize), linearly or by 1 / depth, which shows more detail
-close by. White is no depth: nothing there.
+close by. That range is measured over a 32 × 32 grid of well covered
+pixels and eased over a few frames, so the view stays steady while the
+camera moves. White is no depth: nothing there.
 *Test objects* puts an opaque box and a glass sphere where the start view
 looks, to check how objects and splats cover each other.
 

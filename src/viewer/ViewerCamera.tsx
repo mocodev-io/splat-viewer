@@ -170,6 +170,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     const still = useStillDof({
         app, controls, frame, lens, focus, progress, busy,
         accumulate: lens.dof && debugView === 'image',
+        depthRange: depthView > 0,
         sceneKey: JSON.stringify([sceneKey, lens, tonemapping, highPrecision, postEffects, background, debugView, depthRange, farClip])
     });
 
@@ -179,8 +180,10 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     useAppEvent('prerender', () => {
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
-        const blur = lens.dof || debugView === 'blur amount' ? still.current.overblur : 0;
-        updateLensDof(app, cf, lens, focus.current, blur, depthView);
+        const s = still.current;
+        const blur = lens.dof || debugView === 'blur amount' ? s.overblur : 0;
+        if (!s.range) return;
+        updateLensDof(app, cf, lens, focus.current, blur, s.mode !== 'moving', depthView, s.range);
     });
 
     return (

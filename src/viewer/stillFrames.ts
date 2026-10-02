@@ -108,6 +108,46 @@ const captureGLSL = /* glsl */ `
     }
 `;
 
+// The depth range of the image for the normalized depth view (lensDof.ts):
+// nearest and farthest depth over a 32 x 32 grid, only where the coverage is
+// above a half (a faint soft edge has an unreliable depth of its own), eased
+// from the previous frame's range so the view does not jump as the grid
+// lands on other surfaces while the camera moves. One pixel.
+const rangeGLSL = /* glsl */ `
+    varying vec2 uv0;
+    uniform highp sampler2D still_depth;
+    uniform sampler2D still_scene;
+    uniform highp sampler2D still_prev;
+    uniform vec4 still_range;     // far, reciprocal depth (1) or linear (0), easing (0 takes the new range), -
+    void main() {
+        float far = still_range.x;
+        float dMin = 1e30;
+        float dMax = 0.0;
+        for (int gy = 0; gy < 32; gy++) {
+            for (int gx = 0; gx < 32; gx++) {
+                vec2 g = (vec2(float(gx), float(gy)) + 0.5) / 32.0;
+                float v = texture2DLod(still_depth, g, 0.0).r;
+                float d = v;
+                if (still_range.y > 0.5) {
+                    float a = texture2DLod(still_scene, g, 0.0).a;
+                    float s = v - (1.0 - a) / far;
+                    d = a > 0.5 && s > 1e-7 ? min(a / s, far) : far;
+                }
+                if (d < far * 0.999) {
+                    dMin = min(dMin, d);
+                    dMax = max(dMax, d);
+                }
+            }
+        }
+        vec4 prev = texture2DLod(still_prev, vec2(0.5), 0.0);
+        bool found = dMax > 0.0;
+        bool eased = still_range.z > 0.0 && prev.b > 0.5;
+        vec2 range = found ? vec2(dMin, dMax) : prev.rg;
+        if (found && eased) range = mix(prev.rg, range, still_range.z);
+        gl_FragColor = vec4(range, found || eased ? 1.0 : 0.0, 1.0);
+    }
+`;
+
 // ... and put back into the scene depth for every aperture sample.
 const restoreGLSL = /* glsl */ `
     varying vec2 uv0;
@@ -185,11 +225,15 @@ export class StillFrames {
     private avg: RenderTarget;             // their average, read by the passes after the scene pass
     private geo: RenderTarget;             // depth and coverage of the last moving frame
     private geoValid = false;
+    private ranges: [RenderTarget, RenderTarget];   // depth range, this frame's and the previous (1 x 1)
+    private rangeFrames = 0;               // frames the range has been followed
+    private rangeOptions: { far: number; reciprocal: boolean } | null = null;
     private depthTarget: RenderTarget | null = null;   // writes into the scene depth texture
     private pass: AccumulatePass;
     private accumulateShader: Shader;
     private averageShader: Shader;
     private copyShader: Shader;
+    private rangeShader: Shader;
     private captureShader: Shader;
     private restoreShader: Shader;
     private presentShader: Shader;
@@ -201,6 +245,12 @@ export class StillFrames {
     private capture = false;
     /** samples in `sum` */
     count = 0;
+
+    /** The depth range for the normalized depth view, and whether it holds one yet. */
+    get range() {
+        // after a frame the newest range is the second of the pair
+        return { texture: this.ranges[1].colorBuffer, ready: this.rangeFrames > 0 };
+    }
 
     /** Samples the still shows: whole pairs. */
     get shown() {
@@ -219,6 +269,16 @@ export class StillFrames {
         this.accumulateShader = quadShader(device, 'StillAccumulate', accumulateGLSL);
         this.averageShader = quadShader(device, 'StillAverage', averageGLSL);
         this.copyShader = quadShader(device, 'StillCopy', copyGLSL);
+        this.rangeShader = quadShader(device, 'StillRange', rangeGLSL);
+        const range = (name: string) => {
+            const colorBuffer = new Texture(device, {
+                name, width: 1, height: 1, format: PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: FILTER_NEAREST, magFilter: FILTER_NEAREST,
+                addressU: ADDRESS_CLAMP_TO_EDGE, addressV: ADDRESS_CLAMP_TO_EDGE
+            });
+            return new RenderTarget({ name, colorBuffer, depth: false });
+        };
+        this.ranges = [range('StillRangeA'), range('StillRangeB')];
         this.captureShader = quadShader(device, 'StillCapture', captureGLSL);
         this.restoreShader = quadShader(device, 'StillRestore', restoreGLSL);
         this.presentShader = quadShader(device, 'StillPresent', presentGLSL);
@@ -247,13 +307,17 @@ export class StillFrames {
     /**
      * Sets up this frame, before it renders: whether the passes after the
      * scene pass read the average (`active`), the aperture sample to add, if
-     * any: lens point (x, y) in units of the f-stop radius, `catsEye` 0–1, and
-     * for a moving frame whether to keep its depth for a coming still.
+     * any: lens point (x, y) in units of the f-stop radius, `catsEye` 0–1,
+     * for a moving frame whether to keep its depth for a coming still, and
+     * whether to follow the depth range for the normalized depth view.
      */
-    prepare(cameraFrame: { renderPassCamera: unknown } | undefined, active: boolean, sample: [number, number, number] | null, capture: boolean) {
+    prepare(cameraFrame: { renderPassCamera: unknown } | undefined, active: boolean, sample: [number, number, number] | null,
+        capture: boolean, range: { far: number; reciprocal: boolean } | null) {
         this.active = active;
         this.sample = active ? sample : null;
         this.capture = !active && capture;
+        if (!range) this.rangeFrames = 0;
+        this.rangeOptions = range;
         const rpc = cameraFrame?.renderPassCamera as CameraFramePass | null | undefined;
         if (rpc) this.hook(rpc);
     }
@@ -278,7 +342,7 @@ export class StillFrames {
             }
             this.scene = rpc.rt?.colorBuffer ?? null;
             this.depth = rpc.sceneDepthTexture;
-            this.pass.enabled = (this.active || this.capture) && !!this.scene;
+            this.pass.enabled = (this.active || this.capture || !!this.rangeOptions) && !!this.scene;
             if (!this.pass.enabled || !this.active) return;
             const avg = this.avg.colorBuffer;
             rpc.composePass!.sceneTexture = avg;
@@ -300,9 +364,22 @@ export class StillFrames {
         const depth = this.depth;
         this.device.setBlendState(BlendState.NOBLEND);
 
+        // the depth range for the normalized depth view
+        const range = this.rangeOptions;
+        if (range && depth) {
+            const [next, prev] = this.ranges;
+            scope.resolve('still_depth').setValue(depth);
+            scope.resolve('still_scene').setValue(scene);
+            scope.resolve('still_prev').setValue(prev.colorBuffer);
+            scope.resolve('still_range').setValue([range.far, range.reciprocal ? 1 : 0, this.rangeFrames > 0 ? 0.15 : 0, 0]);
+            drawQuadWithShader(this.device, next, this.rangeShader);
+            this.ranges = [prev, next];
+            this.rangeFrames++;
+        }
+
         // moving: keep this frame's depth and coverage
         if (!this.active) {
-            if (!depth) return;
+            if (!depth || !this.capture) return;
             scope.resolve('still_depth').setValue(depth);
             scope.resolve('still_scene').setValue(scene);
             drawQuadWithShader(this.device, this.geo, this.captureShader);
@@ -358,7 +435,7 @@ export class StillFrames {
     destroy() {
         this.active = false;
         this.pass.enabled = false;
-        for (const rt of [this.frame, this.hold, this.sum, this.pairs, this.avg, this.geo]) {
+        for (const rt of [this.frame, this.hold, this.sum, this.pairs, this.avg, this.geo, ...this.ranges]) {
             rt.destroyTextureBuffers();
             rt.destroy();
         }

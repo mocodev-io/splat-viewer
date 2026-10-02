@@ -16,7 +16,7 @@
 // c∞ is the blur of a point at infinity; behind the focus plane the blur
 // levels off towards it, in front of it it keeps growing.
 
-import { SHADERLANGUAGE_GLSL, ShaderChunks, type AppBase } from 'playcanvas';
+import { SHADERLANGUAGE_GLSL, ShaderChunks, type AppBase, type Texture } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import type { Lens } from '../scene/experience';
 
@@ -42,6 +42,8 @@ const composeDofGLSL = /* glsl */ `
         uniform vec4 lens_params;    // focus (scene units), c∞ (pixels, radius), max radius, edge band (pixels)
         uniform vec4 lens_quality;   // samples, depth probes, depth format (1 linear, 2 reciprocal), far
         uniform float lens_view;     // normalized depth view: 0 off, 1 linear, 2 inverse
+        uniform vec4 lens_extra;     // grain (over-blur), blur amount view white (pixels), depth range ready, -
+        uniform highp sampler2D lens_rangeMap;   // depth range of the image (stillFrames.ts): nearest, farthest
 
         // The splat scene depth holds, per pixel, the coverage-weighted sum of
         // 1 / depth of the splats, plus the uncovered rest (1 - A) times the
@@ -107,7 +109,7 @@ const composeDofGLSL = /* glsl */ `
         }
 
         // Each pixel gathers samples spread evenly over a disc (golden-angle
-        // spiral, turned by a per-pixel angle) and sorts them into two layers:
+        // spiral) and sorts them into two layers:
         //
         // - its own surface and what lies behind it: a sample counts when its
         //   blur circle reaches this pixel (background behind a sharper edge
@@ -139,12 +141,16 @@ const composeDofGLSL = /* glsl */ `
             // the soft-edge band (lens_params.w) reaches, since the depth at a
             // splat's soft rim only gets to the object's real depth some
             // pixels in.
-            // Every pixel turns the sample pattern by its own angle
-            // (interleaved gradient noise, Jimenez 2014): with one pattern for
-            // all pixels, too few samples for a large blur show as copies,
-            // stepped lines along sharp edges; turned per pixel, the same
-            // error becomes a fine, even grain.
-            float turn = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+            // For the over-blur on a still (radius up to OVERBLUR_MAX) every
+            // pixel turns the sample pattern by its own angle (interleaved
+            // gradient noise, Jimenez 2014): with one pattern for all pixels,
+            // too few samples for a large blur show as copies, stepped lines;
+            // turned per pixel the same error becomes fine grain, which the
+            // averaged still hardly shows. The quick DoF while moving keeps
+            // one smooth pattern within its smaller radius.
+            float turn = lens_extra.x > 0.5
+                ? 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))
+                : 0.0;
 
             float reach = centerSize;
             for (int i = 0; i < 32; i++) {
@@ -203,9 +209,9 @@ const composeDofGLSL = /* glsl */ `
             // Debug view: red is this pixel's own blur behind the focus plane,
             // green in front of it or the blurred foreground over it. Squared
             // against the gamma the debug output gets, so brightness follows
-            // the blur size.
-            float ownAmount = centerSize / maxR;
-            float nearAmount = nearCover > 0.0 ? cover * nearSize / nearCover / maxR : 0.0;
+            // the blur size; white is a fixed radius (lens_extra.y).
+            float ownAmount = centerSize / lens_extra.y;
+            float nearAmount = nearCover > 0.0 ? cover * nearSize / nearCover / lens_extra.y : 0.0;
             vec2 amount = center.y < 0.5 ? vec2(ownAmount, nearAmount) : vec2(0.0, max(ownAmount, nearAmount));
             dCoc = pow(clamp(amount, 0.0, 1.0), vec2(2.2));
 
@@ -218,23 +224,31 @@ const composeDofGLSL = /* glsl */ `
 // The normalized depth view, through the engine's composeMainEndPS hook (after
 // tone mapping, before gamma, like the engine's own depth view): z-depth
 // normalize, as compositing tools do it. The nearest and farthest depth in
-// the image are found from a 12 x 12 grid of depth samples (the same for
-// every pixel, so cheap enough for a debug view), and the depth is spread over
-// 0..1 between them, linearly or by 1 / depth (more detail close by). Pixels
-// without depth (nothing there) come out white and do not count.
+// the image come from a pass of their own (stillFrames.ts), over a 32 x 32
+// grid of well covered pixels and eased over a few frames, so the view stays
+// steady while the camera moves; until that is ready, from a 12 x 12 grid
+// here. The depth is spread over 0..1 between them, linearly or by 1 / depth
+// (more detail close by). Pixels without depth (nothing there) come out
+// white and do not count.
 const composeMainEndGLSL = /* glsl */ `
     #ifdef DOF
     #ifndef LENS_OFF
         if (lens_view > 0.5) {
             float dMin = 1e30;
             float dMax = 0.0;
-            for (int gy = 0; gy < 12; gy++) {
-                for (int gx = 0; gx < 12; gx++) {
-                    vec2 g = (vec2(float(gx), float(gy)) + 0.5) / 12.0;
-                    float gd = lensDepth(g);
-                    if (gd < lens_quality.w * 0.999) {
-                        dMin = min(dMin, gd);
-                        dMax = max(dMax, gd);
+            if (lens_extra.z > 0.5) {
+                vec2 range = texture2DLod(lens_rangeMap, vec2(0.5), 0.0).rg;
+                dMin = range.x;
+                dMax = range.y;
+            } else {
+                for (int gy = 0; gy < 12; gy++) {
+                    for (int gx = 0; gx < 12; gx++) {
+                        vec2 g = (vec2(float(gx), float(gy)) + 0.5) / 12.0;
+                        float gd = lensDepth(g);
+                        if (gd < lens_quality.w * 0.999) {
+                            dMin = min(dMin, gd);
+                            dMax = max(dMax, gd);
+                        }
                     }
                 }
             }
@@ -261,18 +275,26 @@ export type DepthView = 0 | 1 | 2;
 
 // The gather stands in while the camera moves, and adds a shrinking
 // over-blur while a still is accumulated over the aperture (useStillDof.ts),
-// so it has one fixed setting: samples,
-// depth probes and the largest blur radius as a fraction of the image height.
-const GATHER = { samples: 48, probes: 16, maxBlur: 0.06 };
+// so it has one fixed setting: samples, depth probes and the largest blur
+// radius as a fraction of the image height.
+const GATHER = { samples: 32, probes: 16, maxBlur: 0.025 };
+// The over-blur is a fraction of the full blur, but that fraction of a
+// strongly blurred foreground is still more than the moving limit.
+const OVERBLUR_MAX = 0.08;
+// white in the blur amount view, as a fraction of the image height
+const BLUR_VIEW_WHITE = 0.025;
 
 /**
  * Sets the engine's DoF to its cheapest (it only has to provide the scene
  * depth and the compose hook) and the lens uniforms for this frame.
  * `focus` in meters; `blur` scales every blur circle: 1 for the lens, less
  * for the over-blur on a still being accumulated (useStillDof.ts), 0 keeps
- * the image sharp (debug views).
+ * the image sharp (debug views); `still` gives the over-blur its larger
+ * radius limit and grain. `range` is the depth range texture for the
+ * normalized depth view (stillFrames.ts), when it is ready.
  */
-export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, view: DepthView) {
+export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, still: boolean,
+    view: DepthView, range: { texture: Texture; ready: boolean }) {
     const dof = cf.dof;
     dof.highQuality = false;
     dof.nearBlur = false;
@@ -292,7 +314,10 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const scope = device.scope;
     // the soft rim of splat edges, roughly a percent of the image height
     const edgeBand = 0.01 * device.height;
-    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, q.maxBlur * device.height, edgeBand]);
+    const maxBlur = still ? OVERBLUR_MAX : q.maxBlur;
+    scope.resolve('lens_params').setValue([S / lens.metersPerUnit, radiusPx * blur, maxBlur * device.height, edgeBand]);
     scope.resolve('lens_quality').setValue([q.samples, q.probes, reciprocal ? 2 : 1, camera.farClip]);
     scope.resolve('lens_view').setValue(view);
+    scope.resolve('lens_extra').setValue([still ? 1 : 0, BLUR_VIEW_WHITE * device.height, range.ready ? 1 : 0, 0]);
+    scope.resolve('lens_rangeMap').setValue(range.texture);
 }
