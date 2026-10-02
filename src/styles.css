@@ -1,0 +1,50 @@
+:root {
+    --bg: #0b0b0d;
+    --fg: #e8e6e3;
+    --dim: #8a8780;
+    --accent: #ffb547;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.4 system-ui, sans-serif;
+}
+
+.viewport {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+    outline: none;
+}
+
+.hud {
+    position: fixed;
+    left: 12px;
+    bottom: 10px;
+    display: flex;
+    gap: 14px;
+    font: 11px var(--mono);
+    color: var(--dim);
+    pointer-events: none;
+    text-shadow: 0 1px 2px #000;
+}
+.hud-file { color: var(--accent); }
+
+.hint {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--dim);
+    text-align: center;
+    max-width: calc(100vw - 32px);
+    pointer-events: none;
+}

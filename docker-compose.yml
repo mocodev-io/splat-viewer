@@ -5,8 +5,6 @@ services:
     ports:
       - "8096:80"
     volumes:
-      # folder with your .ply / .sog files (and SOG / LOD folders)
+      # .ply / .sog files, SOG / LOD folders, and optional <name>.json scene settings
       - /mnt/user/appdata/splat-viewer/splats:/splats:ro
-      # optional: your own .cube / PNG-strip LUTs
-      - /mnt/user/appdata/splat-viewer/luts:/luts:ro
     restart: unless-stopped
