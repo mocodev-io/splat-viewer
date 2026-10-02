@@ -47,18 +47,23 @@ distance, no separate field of view.
 - **Sensor**: Full frame, Super 35, APS-C, Micro 4/3 or Custom. The sensor
   width spans the image width (like Blender's default), so the angle of view
   is `2·atan(sensor width / 2·focal length)`.
-- **Focus m** is in meters; **Focus on orbit point** sets it to the distance
-  of the point the camera orbits around.
+- **Focus m** is in meters (0.1–50). **Double-click** in the image focuses
+  on what is there, **Focus center** on what is in the middle of the image.
+  Both read the depth of the splat or object under that point (the
+  engine's picker) and measure it along the view direction, as a real
+  focus plane is.
 - **Depth of field** follows the thin-lens formula, the circle of confusion
   `c = f² / (N·(S − f)) · |d − S| / d`, so f-stop, focal length and focus
-  distance act as on a real camera. **Near blur** blurs in front of the
-  focus plane too.
+  distance act as on a real camera, in front of the focus plane as well as
+  behind it.
 - **Blur quality** caps the blur radius (low 1.2 %, medium 2.2 %, high 3.5 %
   of the image height) at what the engine's blur can sample smoothly. A
   long lens wide open hits that cap; that is the limit, not a fault.
-- **Meters / unit**: splats have no scale of their own, and the DoF needs
-  one. Measure something of known size in the scene (a door is about 2 m)
-  in scene units and divide: 2 m over 0.5 units gives 4.
+- **Scale**: splats have no scale of their own, and the DoF needs one.
+  Press **Measure**, click both ends of something of known size (a door is
+  about 2 m), enter that size as **Real length m** and press **Apply
+  scale**; **Meters / unit** follows. Esc stops measuring, a third click
+  starts a new measurement.
 
 The lens is saved under `extras.lens`. The `fov` in `cameras` stays filled
 (the vertical angle over the sensor height) so SuperSplat still reads the
@@ -130,6 +135,8 @@ src/
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
   viewer/physicalDof.ts    thin-lens circle of confusion for the engine's DoF
+  viewer/ScenePointer.tsx  clicks in the image: double-click focus, measuring
+  viewer/MeasureOverlay.tsx the measuring line
   viewer/FrameStats.tsx    fps / status line
   ui/panel.ts              Leva panel
 ```
@@ -163,7 +170,10 @@ Notes:
   small CoC shader (`RenderPassCoC`, engine 2.23) is swapped for the
   thin-lens formula; blur, near / far handling and quality stay the
   engine's. This touches engine internals, which is why the engine version
-  is pinned.
+  is pinned. Near blur is always on; the engine lets a blurred foreground
+  edge spread only partly over a sharp background.
+- A new engine `Picker` returns a wrong point for its very first pick (seen
+  with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post
   effects (SuperSplat keeps splats in gamma space), which is what physically
   based effects such as DoF and bloom expect.

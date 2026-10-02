@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { Color, Vec3 } from 'playcanvas';
+import { Color, Picker, Vec3 } from 'playcanvas';
 import { Entity } from '@playcanvas/react';
 import { Camera, Script } from '@playcanvas/react/components';
 import { useApp, useAppEvent } from '@playcanvas/react/hooks';
@@ -12,8 +12,14 @@ import { dofSettings, installPhysicalCoc } from './physicalDof';
 export type ViewRequest = { pose: CameraPose; id: number };
 
 export type CameraApi = {
-    /** Where the camera is, what it orbits around and how far away that is (scene units). */
-    getView: () => { position: Vec3Tuple; target: Vec3Tuple; distance: number };
+    /** Where the camera is and what it orbits around, for saving the view. */
+    getView: () => { position: Vec3Tuple; target: Vec3Tuple };
+    /** The world point under a position in the canvas (CSS pixels), or null for empty sky. */
+    pick: (x: number, y: number) => Promise<Vec3Tuple | null>;
+    /** Distance of a point along the view direction (scene units): what the focus plane is measured in. */
+    viewDepth: (p: Vec3Tuple) => number;
+    /** A world point in canvas CSS pixels; `behind` when it is behind the camera. */
+    toScreen: (p: Vec3Tuple) => { x: number; y: number; behind: boolean };
 };
 
 type ViewerCameraProps = {
@@ -37,20 +43,55 @@ export function ViewerCamera({ view, lens, farClip, debugView, api, tonemapping,
     const frame = useRef<CameraFrame>(null);
 
     useEffect(() => {
+        // The engine's picker renders splats and objects into its own buffer
+        // with depth, on demand only (one render per pick).
+        let picker: Picker | null = null;
+        const entity = () => controls.current!.entity;
+
         api.current = {
             getView: () => {
                 const cc = controls.current!;
-                const entity = cc.entity;
-                const p = entity.getPosition();
+                const p = entity().getPosition();
                 // CameraControls keeps its orbit distance privately; the
                 // target is that far along the view direction
                 const distance = (cc as unknown as { _pose?: { distance?: number } })._pose?.distance || 1;
-                const t = entity.forward.clone().mulScalar(distance).add(p);
-                return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z], distance };
+                const t = entity().forward.clone().mulScalar(distance).add(p);
+                return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z] };
+            },
+            pick: async (x, y) => {
+                const device = app.graphicsDevice;
+                const canvas = device.canvas as HTMLCanvasElement;
+                const sx = device.width / canvas.clientWidth;
+                const sy = device.height / canvas.clientHeight;
+                const px = Math.floor(x * sx);
+                const py = Math.floor(y * sy);
+                const fresh = !picker;
+                picker ??= new Picker(app, device.width, device.height, true);
+                picker.resize(device.width, device.height);
+                picker.prepare(entity().camera!, app.scene);
+                // a new picker's first result is not valid yet (seen with
+                // splats, engine 2.23); pick once more
+                if (fresh) {
+                    await picker.getWorldPointAsync(px, py);
+                    picker.prepare(entity().camera!, app.scene);
+                }
+                const p = await picker.getWorldPointAsync(px, py);
+                return p ? [p.x, p.y, p.z] : null;
+            },
+            viewDepth: p => {
+                const e = entity();
+                return new Vec3(...p).sub(e.getPosition()).dot(e.forward);
+            },
+            toScreen: p => {
+                const s = entity().camera!.worldToScreen(new Vec3(...p));
+                return { x: s.x, y: s.y, behind: s.z < 0 };
             }
         };
-        return () => { api.current = null; };
-    }, [api]);
+        return () => {
+            api.current = null;
+            picker?.destroy();
+        };
+    }, [api, app]);
 
     // move to a requested pose; CameraControls animates there
     useEffect(() => {
@@ -99,10 +140,10 @@ export function ViewerCamera({ view, lens, farClip, debugView, api, tonemapping,
         const cf = frame.current;
         if (!cf) return;
         cf.dof.enabled = lens.dof || debugView !== 'image';
-        cf.dof.nearBlur = lens.nearBlur;
+        cf.dof.nearBlur = true;     // a real lens blurs in front of the focus plane too
         cf.dof.highQuality = true;
         cf.rendering.debug = debugView === 'depth' ? 'depth' : debugView === 'blur amount' ? 'dofcoc' : 'none';
-    }, [lens.dof, lens.nearBlur, debugView]);
+    }, [lens.dof, debugView]);
 
     // The blur depends on the image's aspect too, so it is worked out every
     // frame; the physical CoC shader goes in whenever the engine has built

@@ -127,7 +127,6 @@ export type Lens = {
     focusDistance: number;       // m
     metersPerUnit: number;
     dof: boolean;
-    nearBlur: boolean;           // blur in front of the focus plane too
     blurQuality: typeof BLUR_QUALITIES[number];
 };
 
@@ -136,7 +135,7 @@ export const lensRanges = {
     sensorHeight: { min: 1, max: 70, step: 0.01 },
     focalLength: { min: 8, max: 300, step: 1 },
     fStop: { min: 0.95, max: 22, step: 0.05 },
-    focusDistance: { min: 0.05, max: 500, step: 0.01 },
+    focusDistance: { min: 0.1, max: 50, step: 0.01 },
     metersPerUnit: { min: 0.001, max: 100, step: 0.001 }
 } as const;
 
@@ -149,7 +148,6 @@ export const defaultLens = (): Lens => ({
     focusDistance: 3,
     metersPerUnit: 1,
     dof: false,
-    nearBlur: true,
     blurQuality: 'medium'
 });
 

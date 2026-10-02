@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FILLMODE_FILL_WINDOW, RESOLUTION_AUTO, type BoundingBox } from 'playcanvas';
 import { Application } from '@playcanvas/react';
 import {
-    defaultExperience, loadExperience, sceneLens, sceneLighting, sceneObjects, settingsUrlFor, verticalFov,
-    type CameraPose, type ExperienceSettings, type SceneObject
+    defaultExperience, lensRanges, loadExperience, sceneLens, sceneLighting, sceneObjects, settingsUrlFor, verticalFov,
+    type CameraPose, type ExperienceSettings, type SceneObject, type Vec3Tuple
 } from './scene/experience';
 import { findSplats, splatUrl } from './scene/splats';
 import { SplatSetup } from './viewer/SplatSetup';
@@ -11,6 +11,8 @@ import { Splat } from './viewer/Splat';
 import { SceneLighting, SceneObjects } from './viewer/SceneObjects';
 import { ViewerCamera, type CameraApi, type ViewRequest } from './viewer/ViewerCamera';
 import { FrameStats } from './viewer/FrameStats';
+import { ScenePointer } from './viewer/ScenePointer';
+import { MeasureOverlay, measuredLength } from './viewer/MeasureOverlay';
 import { useDebugPanel, useLensPanel, useLookPanel, useSplatPanel } from './ui/panel';
 
 type Framing = { pose: CameraPose; radius: number };
@@ -58,26 +60,73 @@ export function App() {
     const [framing, setFraming] = useState<Framing | null>(null);
     const [status, setStatus] = useState('');
     const [view, setView] = useState<ViewRequest | null>(null);
+    const [measuring, setMeasuring] = useState(false);
+    const [measurePoints, setMeasurePoints] = useState<Vec3Tuple[]>([]);
     const cameraApi = useRef<CameraApi>(null);
 
     useEffect(() => { findSplats().then(setSplats); }, []);
 
-    // focus where the camera orbits: its distance, in meters
-    const focusOrbit = useCallback(() => {
-        const v = cameraApi.current?.getView();
-        if (!v) return;
+    // focus on what is under a point of the image (canvas CSS pixels); the
+    // focus plane's distance is measured along the view direction
+    const focusAt = useCallback(async (x: number, y: number) => {
+        const cam = cameraApi.current;
+        const p = await cam?.pick(x, y);
+        if (!cam || !p) {
+            setStatus('nothing to focus on there');
+            return;
+        }
         const { lens } = live.current.lensPanel;
-        live.current.lensPanel.apply({ focusDistance: v.distance * lens.metersPerUnit });
+        const r = lensRanges.focusDistance;
+        const m = Math.min(Math.max(cam.viewDepth(p) * lens.metersPerUnit, r.min), r.max);
+        live.current.lensPanel.apply({ focusDistance: m });
+        setStatus(`focus ${m.toFixed(2)} m`);
+    }, []);
+
+    // the canvas fills the window, so its centre is the window's
+    const focusCenter = useCallback(() => focusAt(window.innerWidth / 2, window.innerHeight / 2), [focusAt]);
+
+    const startMeasure = useCallback(() => {
+        setMeasuring(true);
+        setMeasurePoints([]);
+        setStatus('measure: click two points · Esc stops');
+    }, []);
+
+    const stopMeasure = useCallback(() => {
+        setMeasuring(false);
+        setMeasurePoints([]);
+        setStatus('');
+    }, []);
+
+    // a third click starts a new measurement
+    const measureClick = useCallback(async (x: number, y: number) => {
+        const p = await cameraApi.current?.pick(x, y);
+        if (!p) {
+            setStatus('nothing to measure there');
+            return;
+        }
+        setMeasurePoints(pts => (pts.length >= 2 ? [p] : [...pts, p]));
+    }, []);
+
+    const applyScale = useCallback((realLength: number) => {
+        const units = measuredLength(live.current.measurePoints);
+        if (!units) {
+            setStatus('measure two points first');
+            return;
+        }
+        const r = lensRanges.metersPerUnit;
+        const mpu = Math.min(Math.max(realLength / units, r.min), r.max);
+        live.current.lensPanel.apply({ metersPerUnit: mpu });
+        setStatus(`scale ${mpu.toFixed(3)} m per unit`);
     }, []);
 
     const look = useLookPanel();
-    const lensPanel = useLensPanel({ onFocusOrbit: focusOrbit });
+    const lensPanel = useLensPanel({ onFocusCenter: focusCenter, onMeasure: startMeasure, onApplyScale: applyScale });
     const debug = useDebugPanel();
 
     // panel callbacks change identity every render; the handlers below read
     // the current ones through refs so they can stay stable
-    const live = useRef({ look, lensPanel, experience, framing });
-    live.current = { look, lensPanel, experience, framing };
+    const live = useRef({ look, lensPanel, experience, framing, measurePoints });
+    live.current = { look, lensPanel, experience, framing, measurePoints };
     const loadedRef = useRef(loaded);
     loadedRef.current = loaded;
 
@@ -97,6 +146,8 @@ export function App() {
 
     const unload = useCallback(() => {
         setLoaded(null);
+        setMeasuring(false);
+        setMeasurePoints([]);
         setExperience(defaultExperience());
         setFraming(null);
         setStatus('');
@@ -195,6 +246,13 @@ export function App() {
                     />
                 )}
                 {loaded && <SceneObjects objects={objects} />}
+                <ScenePointer
+                    measuring={measuring}
+                    onDoubleClick={focusAt}
+                    onMeasureClick={measureClick}
+                    onCancel={stopMeasure}
+                />
+                <MeasureOverlay points={measurePoints} metersPerUnit={lensPanel.lens.metersPerUnit} api={cameraApi} />
                 <FrameStats status={status} loaded={loaded} />
             </Application>
             {hint && <div className="hint">{hint}</div>}

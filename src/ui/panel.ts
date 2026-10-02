@@ -42,8 +42,15 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
     return { orientation: values.orientation as Orientation, set };
 }
 
+type LensPanelProps = {
+    onFocusCenter: () => void;
+    onMeasure: () => void;
+    onApplyScale: (realLength: number) => void;
+};
+
 // The lens. A sensor preset fixes the sensor size; 'Custom' shows the fields.
-export function useLensPanel({ onFocusOrbit }: { onFocusOrbit: () => void }) {
+// Double-clicking in the image also focuses (see ScenePointer).
+export function useLensPanel({ onFocusCenter, onMeasure, onApplyScale }: LensPanelProps) {
     const r = lensRanges;
     const d = defaultLens();
     const custom = (get: (path: string) => unknown) => get('Lens.sensor') === 'Custom';
@@ -54,12 +61,16 @@ export function useLensPanel({ onFocusOrbit }: { onFocusOrbit: () => void }) {
         focalLength: { value: d.focalLength, ...r.focalLength, label: 'Focal length mm' },
         fStop: { value: d.fStop, ...r.fStop, label: 'f-stop' },
         focusDistance: { value: d.focusDistance, ...r.focusDistance, label: 'Focus m' },
-        'Focus on orbit point': button(() => onFocusOrbit()),
+        'Focus center': button(() => onFocusCenter()),
         dof: { value: d.dof, label: 'Depth of field' },
-        nearBlur: { value: d.nearBlur, label: 'Near blur', render: get => get('Lens.dof') as boolean },
         blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Blur quality', render: get => get('Lens.dof') as boolean },
-        metersPerUnit: { value: d.metersPerUnit, ...r.metersPerUnit, label: 'Meters / unit' }
-    }), [onFocusOrbit]);
+        Scale: folder({
+            metersPerUnit: { value: d.metersPerUnit, ...r.metersPerUnit, label: 'Meters / unit' },
+            Measure: button(() => onMeasure()),
+            realLength: { value: 1, min: 0.001, step: 0.01, label: 'Real length m' },
+            'Apply scale': button(get => onApplyScale(get('Lens.Scale.realLength') as number))
+        }, { collapsed: true })
+    }), [onFocusCenter, onMeasure, onApplyScale]);
 
     const sensor = v.sensor as SensorName;
     const [sensorWidth, sensorHeight] = sensor === 'Custom' ? [v.sensorWidth, v.sensorHeight] : SENSORS[sensor];
@@ -70,7 +81,6 @@ export function useLensPanel({ onFocusOrbit }: { onFocusOrbit: () => void }) {
         focusDistance: v.focusDistance,
         metersPerUnit: v.metersPerUnit,
         dof: v.dof,
-        nearBlur: v.nearBlur,
         blurQuality: v.blurQuality as Lens['blurQuality']
     };
 
