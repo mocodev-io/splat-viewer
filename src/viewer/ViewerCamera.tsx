@@ -7,15 +7,18 @@ import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { horizontalFov, type CameraPose, type Lens, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
 import type { DebugView } from '../ui/panel';
-import { dofSettings, installPhysicalCoc } from './physicalDof';
+import { updateLensDof } from './lensDof';
 
 export type ViewRequest = { pose: CameraPose; id: number };
 
 export type CameraApi = {
     /** Where the camera is and what it orbits around, for saving the view. */
     getView: () => { position: Vec3Tuple; target: Vec3Tuple };
-    /** The world point under a position in the canvas (CSS pixels), or null for empty sky. */
-    pick: (x: number, y: number) => Promise<Vec3Tuple | null>;
+    /**
+     * The world point under a position in the canvas (CSS pixels), or null for
+     * empty sky. `coarse` picks from a quarter-resolution buffer (autofocus).
+     */
+    pick: (x: number, y: number, coarse?: boolean) => Promise<Vec3Tuple | null>;
     /** Distance of a point along the view direction (scene units): what the focus plane is measured in. */
     viewDepth: (p: Vec3Tuple) => number;
     /** A world point in canvas CSS pixels; `behind` when it is behind the camera. */
@@ -25,6 +28,7 @@ export type CameraApi = {
 type ViewerCameraProps = {
     view: ViewRequest | null;             // a new id moves the camera there
     lens: Lens;
+    focus: RefObject<number>;             // live focus distance, m (manual or autofocus)
     farClip: number;
     debugView: DebugView;
     api: RefObject<CameraApi | null>;
@@ -37,15 +41,16 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, farClip, debugView, api, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, api, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
     const app = useApp();
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
 
     useEffect(() => {
         // The engine's picker renders splats and objects into its own buffer
-        // with depth, on demand only (one render per pick).
-        let picker: Picker | null = null;
+        // with depth, on demand only (one render per pick). A full-resolution
+        // one for clicks, a quarter-resolution one for autofocus.
+        const pickers: { full: Picker | null; coarse: Picker | null } = { full: null, coarse: null };
         const entity = () => controls.current!.entity;
 
         api.current = {
@@ -58,16 +63,18 @@ export function ViewerCamera({ view, lens, farClip, debugView, api, tonemapping,
                 const t = entity().forward.clone().mulScalar(distance).add(p);
                 return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z] };
             },
-            pick: async (x, y) => {
+            pick: async (x, y, coarse = false) => {
                 const device = app.graphicsDevice;
                 const canvas = device.canvas as HTMLCanvasElement;
-                const sx = device.width / canvas.clientWidth;
-                const sy = device.height / canvas.clientHeight;
-                const px = Math.floor(x * sx);
-                const py = Math.floor(y * sy);
-                const fresh = !picker;
-                picker ??= new Picker(app, device.width, device.height, true);
-                picker.resize(device.width, device.height);
+                const scale = coarse ? 0.25 : 1;
+                const w = Math.max(1, Math.floor(device.width * scale));
+                const h = Math.max(1, Math.floor(device.height * scale));
+                const px = Math.floor(x * w / canvas.clientWidth);
+                const py = Math.floor(y * h / canvas.clientHeight);
+                const key = coarse ? 'coarse' : 'full';
+                const fresh = !pickers[key];
+                const picker = pickers[key] ??= new Picker(app, w, h, true);
+                picker.resize(w, h);
                 picker.prepare(entity().camera!, app.scene);
                 // a new picker's first result is not valid yet (seen with
                 // splats, engine 2.23); pick once more
@@ -89,7 +96,8 @@ export function ViewerCamera({ view, lens, farClip, debugView, api, tonemapping,
         };
         return () => {
             api.current = null;
-            picker?.destroy();
+            pickers.full?.destroy();
+            pickers.coarse?.destroy();
         };
     }, [api, app]);
 
@@ -133,27 +141,21 @@ export function ViewerCamera({ view, lens, farClip, debugView, api, tonemapping,
         cf.fringing.intensity = pe.fringing.intensity;
     }, [tonemapping, highPrecision, postEffects]);
 
-    // The lens: depth of field and the debug views. The engine renders the
-    // scene depth only for an effect that reads it, so the depth view turns
-    // DoF on as well; the debug output replaces the image anyway.
+    // The lens: depth of field (lensDof.ts) and the debug views. The engine's
+    // DoF provides the scene depth and the compose hook, so the debug views
+    // turn it on too; without lens DoF they show the image unblurred.
     useEffect(() => {
         const cf = frame.current;
         if (!cf) return;
         cf.dof.enabled = lens.dof || debugView !== 'image';
-        cf.dof.nearBlur = true;     // a real lens blurs in front of the focus plane too
-        cf.dof.highQuality = true;
         cf.rendering.debug = debugView === 'depth' ? 'depth' : debugView === 'blur amount' ? 'dofcoc' : 'none';
     }, [lens.dof, debugView]);
 
-    // The blur depends on the image's aspect too, so it is worked out every
-    // frame; the physical CoC shader goes in whenever the engine has built
-    // (or rebuilt) its DoF passes.
+    // focus and image size change between frames, so the lens is set per frame
     useAppEvent('prerender', () => {
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
-        const { width, height } = app.graphicsDevice;
-        Object.assign(cf.dof, dofSettings(lens, width / Math.max(height, 1)));
-        installPhysicalCoc(cf);
+        updateLensDof(app, cf, lens, focus.current, lens.dof || debugView === 'blur amount');
     });
 
     return (

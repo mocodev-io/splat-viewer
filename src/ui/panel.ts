@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
-    BLUR_QUALITIES, defaultLens, lensRanges, ranges, SENSOR_NAMES, SENSORS, TONEMAPPING,
+    BLUR_QUALITIES, defaultLens, FOCUS_MODES, lensRanges, ranges, SENSOR_NAMES, SENSORS, TONEMAPPING,
     type ExperienceSettings, type Lens, type PostEffectSettings, type SensorName, type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import { ORIENTATIONS, type Orientation } from '../viewer/Splat';
@@ -43,25 +43,29 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
 }
 
 type LensPanelProps = {
-    onFocusCenter: () => void;
+    onAfCenter: () => void;
     onMeasure: () => void;
     onApplyScale: (realLength: number) => void;
 };
 
 // The lens. A sensor preset fixes the sensor size; 'Custom' shows the fields.
-// Double-clicking in the image also focuses (see ScenePointer).
-export function useLensPanel({ onFocusCenter, onMeasure, onApplyScale }: LensPanelProps) {
+// Focus is manual (the slider, the focus ring) or auto: continuous autofocus
+// on the AF point, which a click in the image moves.
+export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelProps) {
     const r = lensRanges;
     const d = defaultLens();
     const custom = (get: (path: string) => unknown) => get('Lens.sensor') === 'Custom';
+    const auto = (get: (path: string) => unknown) => get('Lens.focusMode') === 'auto';
     const [v, set] = useControls('Lens', () => ({
         sensor: { value: d.sensor, options: SENSOR_NAMES, label: 'Sensor' },
         sensorWidth: { value: d.sensorWidth, ...r.sensorWidth, label: 'Width mm', render: custom },
         sensorHeight: { value: d.sensorHeight, ...r.sensorHeight, label: 'Height mm', render: custom },
         focalLength: { value: d.focalLength, ...r.focalLength, label: 'Focal length mm' },
         fStop: { value: d.fStop, ...r.fStop, label: 'f-stop' },
-        focusDistance: { value: d.focusDistance, ...r.focusDistance, label: 'Focus m' },
-        'Focus center': button(() => onFocusCenter()),
+        focusMode: { value: d.focusMode, options: [...FOCUS_MODES], label: 'Focus' },
+        focusDistance: { value: d.focusDistance, ...r.focusDistance, label: 'Focus m', render: get => !auto(get) },
+        afTransition: { value: d.afTransition, ...r.afTransition, label: 'AF transition s', render: auto },
+        'AF center': button(() => onAfCenter()),
         dof: { value: d.dof, label: 'Depth of field' },
         blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Blur quality', render: get => get('Lens.dof') as boolean },
         Scale: folder({
@@ -70,7 +74,7 @@ export function useLensPanel({ onFocusCenter, onMeasure, onApplyScale }: LensPan
             realLength: { value: 1, min: 0.001, step: 0.01, label: 'Real length m' },
             'Apply scale': button(get => onApplyScale(get('Lens.Scale.realLength') as number))
         }, { collapsed: true })
-    }), [onFocusCenter, onMeasure, onApplyScale]);
+    }), [onAfCenter, onMeasure, onApplyScale]);
 
     const sensor = v.sensor as SensorName;
     const [sensorWidth, sensorHeight] = sensor === 'Custom' ? [v.sensorWidth, v.sensorHeight] : SENSORS[sensor];
@@ -78,7 +82,9 @@ export function useLensPanel({ onFocusCenter, onMeasure, onApplyScale }: LensPan
         sensor, sensorWidth, sensorHeight,
         focalLength: v.focalLength,
         fStop: v.fStop,
+        focusMode: v.focusMode as Lens['focusMode'],
         focusDistance: v.focusDistance,
+        afTransition: v.afTransition,
         metersPerUnit: v.metersPerUnit,
         dof: v.dof,
         blurQuality: v.blurQuality as Lens['blurQuality']

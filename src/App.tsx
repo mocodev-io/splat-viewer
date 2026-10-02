@@ -12,6 +12,7 @@ import { SceneLighting, SceneObjects } from './viewer/SceneObjects';
 import { ViewerCamera, type CameraApi, type ViewRequest } from './viewer/ViewerCamera';
 import { FrameStats } from './viewer/FrameStats';
 import { ScenePointer } from './viewer/ScenePointer';
+import { AutoFocus } from './viewer/AutoFocus';
 import { MeasureOverlay, measuredLength } from './viewer/MeasureOverlay';
 import { useDebugPanel, useLensPanel, useLookPanel, useSplatPanel } from './ui/panel';
 
@@ -62,28 +63,24 @@ export function App() {
     const [view, setView] = useState<ViewRequest | null>(null);
     const [measuring, setMeasuring] = useState(false);
     const [measurePoints, setMeasurePoints] = useState<Vec3Tuple[]>([]);
+    const [afPoint, setAfPoint] = useState({ x: 0.5, y: 0.5 });
     const cameraApi = useRef<CameraApi>(null);
+    // the focus distance the lens uses, m: the slider in manual, autofocus in auto
+    const focus = useRef(3);
 
     useEffect(() => { findSplats().then(setSplats); }, []);
 
-    // focus on what is under a point of the image (canvas CSS pixels); the
-    // focus plane's distance is measured along the view direction
-    const focusAt = useCallback(async (x: number, y: number) => {
-        const cam = cameraApi.current;
-        const p = await cam?.pick(x, y);
-        if (!cam || !p) {
-            setStatus('nothing to focus on there');
-            return;
-        }
-        const { lens } = live.current.lensPanel;
-        const r = lensRanges.focusDistance;
-        const m = Math.min(Math.max(cam.viewDepth(p) * lens.metersPerUnit, r.min), r.max);
-        live.current.lensPanel.apply({ focusDistance: m });
-        setStatus(`focus ${m.toFixed(2)} m`);
+    // a click in the image moves the AF point (autofocus only, as on a camera)
+    const imageClick = useCallback((x: number, y: number) => {
+        if (live.current.lensPanel.lens.focusMode !== 'auto') return;
+        setAfPoint({ x: x / window.innerWidth, y: y / window.innerHeight });
     }, []);
 
-    // the canvas fills the window, so its centre is the window's
-    const focusCenter = useCallback(() => focusAt(window.innerWidth / 2, window.innerHeight / 2), [focusAt]);
+    // autofocus on the middle of the image
+    const afCenter = useCallback(() => {
+        setAfPoint({ x: 0.5, y: 0.5 });
+        live.current.lensPanel.apply({ focusMode: 'auto' });
+    }, []);
 
     const startMeasure = useCallback(() => {
         setMeasuring(true);
@@ -120,13 +117,26 @@ export function App() {
     }, []);
 
     const look = useLookPanel();
-    const lensPanel = useLensPanel({ onFocusCenter: focusCenter, onMeasure: startMeasure, onApplyScale: applyScale });
+    const lensPanel = useLensPanel({ onAfCenter: afCenter, onMeasure: startMeasure, onApplyScale: applyScale });
     const debug = useDebugPanel();
 
     // panel callbacks change identity every render; the handlers below read
     // the current ones through refs so they can stay stable
     const live = useRef({ look, lensPanel, experience, framing, measurePoints });
     live.current = { look, lensPanel, experience, framing, measurePoints };
+
+    // Manual focus follows the slider. Switching from auto to manual keeps
+    // the distance autofocus had reached, as a camera does.
+    const lens = lensPanel.lens;
+    const prevMode = useRef(lens.focusMode);
+    if (lens.focusMode === 'manual' && prevMode.current === 'manual') focus.current = lens.focusDistance;
+    useEffect(() => {
+        if (prevMode.current === 'auto' && lens.focusMode === 'manual') {
+            const r = lensRanges.focusDistance;
+            live.current.lensPanel.apply({ focusDistance: Math.min(Math.max(focus.current, r.min), r.max) });
+        }
+        prevMode.current = lens.focusMode;
+    }, [lens.focusMode]);
     const loadedRef = useRef(loaded);
     loadedRef.current = loaded;
 
@@ -138,7 +148,9 @@ export function App() {
         const result = await loadExperience(splatUrl(name));
         if (result.warning) console.warn(result.warning);
         live.current.look.apply(result.settings);
-        live.current.lensPanel.apply(sceneLens(result.settings));
+        const sceneLensSettings = sceneLens(result.settings);
+        live.current.lensPanel.apply(sceneLensSettings);
+        focus.current = sceneLensSettings.focusDistance;
         setExperience(result.settings);
         setFraming(null);
         setLoaded(name);
@@ -178,7 +190,7 @@ export function App() {
             background: { color: look.background },
             postEffectSettings: look.postEffects,
             cameras: [{ initial: pose }, ...experience.cameras.slice(1)],
-            extras: { ...experience.extras, lens }
+            extras: { ...experience.extras, lens: { ...lens, focusDistance: focus.current } }
         };
         download(settingsUrlFor(splatUrl(name)).split('/').pop()!, out);
         setStatus('settings saved (download) · put the file next to the splat');
@@ -227,6 +239,7 @@ export function App() {
                 <ViewerCamera
                     view={view}
                     lens={lensPanel.lens}
+                    focus={focus}
                     farClip={farClip}
                     debugView={debug.view}
                     api={cameraApi}
@@ -248,9 +261,18 @@ export function App() {
                 {loaded && <SceneObjects objects={objects} />}
                 <ScenePointer
                     measuring={measuring}
-                    onDoubleClick={focusAt}
+                    onClick={imageClick}
                     onMeasureClick={measureClick}
                     onCancel={stopMeasure}
+                />
+                <AutoFocus
+                    active={!!loaded && lens.dof && lens.focusMode === 'auto'}
+                    point={afPoint}
+                    transition={lens.afTransition}
+                    metersPerUnit={lens.metersPerUnit}
+                    trigger={loaded ?? ''}
+                    api={cameraApi}
+                    focus={focus}
                 />
                 <MeasureOverlay points={measurePoints} metersPerUnit={lensPanel.lens.metersPerUnit} api={cameraApi} />
                 <FrameStats status={status} loaded={loaded} />

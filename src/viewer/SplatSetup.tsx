@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useApp } from '@playcanvas/react/hooks';
+import { installLensDof } from './lensDof';
 
 // Scene-wide splat settings, applied once before anything loads.
 // Values follow the SuperSplat viewer (viewer.ts), except sceneDepthWrite.
@@ -17,6 +18,9 @@ export function SplatSetup() {
         gsplat.radialSorting = true;
         gsplat.minContribution = 1;
         gsplat.alphaClip = 1 / 255;
+
+        // the lens DoF goes into the compose shader before it is first built
+        installLensDof(app);
 
         // handy from the browser console
         (window as unknown as { viewer: unknown }).viewer = { app };

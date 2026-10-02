@@ -47,18 +47,26 @@ distance, no separate field of view.
 - **Sensor**: Full frame, Super 35, APS-C, Micro 4/3 or Custom. The sensor
   width spans the image width (like Blender's default), so the angle of view
   is `2·atan(sensor width / 2·focal length)`.
-- **Focus m** is in meters (0.1–50). **Double-click** in the image focuses
-  on what is there, **Focus center** on what is in the middle of the image.
-  Both read the depth of the splat or object under that point (the
-  engine's picker) and measure it along the view direction, as a real
-  focus plane is.
+- **Focus**: *manual* or *auto*, as on a camera.
+  - *Manual*: **Focus m** (0.1–50 m) is the focus ring.
+  - *Auto* (continuous AF, with DoF on): the camera keeps focusing on what
+    is under the AF point, the frame in the image. A click in the image
+    moves the AF point, **AF center** puts it back (and switches to auto).
+    It measures only when the camera, the AF point or the scene changed,
+    at most four times a second, and moves the focus to each new distance
+    in **AF transition s** (0 is instant, longer is a slow focus pull).
+    Switching back to manual keeps the distance it reached.
+  - The distance is the depth of the splat or object under the point (the
+    engine's picker) along the view direction, as a real focus plane is.
 - **Depth of field** follows the thin-lens formula, the circle of confusion
   `c = f² / (N·(S − f)) · |d − S| / d`, so f-stop, focal length and focus
   distance act as on a real camera, in front of the focus plane as well as
-  behind it.
-- **Blur quality** caps the blur radius (low 1.2 %, medium 2.2 %, high 3.5 %
-  of the image height) at what the engine's blur can sample smoothly. A
-  long lens wide open hits that cap; that is the limit, not a fault.
+  behind it. Each pixel gathers the scene points whose blur circle reaches
+  it, in HDR before tone mapping: blurred foreground spills softly over the
+  background, bright points become bokeh discs.
+- **Blur quality** sets the samples per pixel and the largest blur (low
+  1.5 %, medium 2.5 %, high 4 % of the image height). A long lens wide open
+  hits that cap; that is the limit, not a fault.
 - **Scale**: splats have no scale of their own, and the DoF needs one.
   Press **Measure**, click both ends of something of known size (a door is
   about 2 m), enter that size as **Real length m** and press **Apply
@@ -134,8 +142,9 @@ src/
   viewer/Splat.tsx         one loaded splat; unmounting frees it
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
-  viewer/physicalDof.ts    thin-lens circle of confusion for the engine's DoF
-  viewer/ScenePointer.tsx  clicks in the image: double-click focus, measuring
+  viewer/lensDof.ts        thin-lens DoF in the compose shader
+  viewer/AutoFocus.tsx     continuous autofocus and the AF point
+  viewer/ScenePointer.tsx  clicks in the image: AF point, measuring
   viewer/MeasureOverlay.tsx the measuring line
   viewer/FrameStats.tsx    fps / status line
   ui/panel.ts              Leva panel
@@ -166,12 +175,13 @@ Notes:
 - A material that does not write scene depth but is rendered opaquely
   leaves a "far away" hole in the depth; transparency and `writeDepth`
   therefore always go together here.
-- The engine's DoF blurs along a straight ramp between two distances. Its
-  small CoC shader (`RenderPassCoC`, engine 2.23) is swapped for the
-  thin-lens formula; blur, near / far handling and quality stay the
-  engine's. This touches engine internals, which is why the engine version
-  is pinned. Near blur is always on; the engine lets a blurred foreground
-  edge spread only partly over a sharp background.
+- The engine's DoF blends a pre-blurred image over the sharp one, which
+  looks harsh, and cannot spread a blurred foreground over the background.
+  The viewer replaces its compose function (`composeDofPS`, through the
+  engine's ShaderChunks API) with its own gather; the engine's DoF stays on
+  only for the scene depth and that hook, with its own blur passes at their
+  cheapest. When bumping the engine, check that chunk still has the same
+  place in the compose shader.
 - A new engine `Picker` returns a wrong point for its very first pick (seen
   with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post

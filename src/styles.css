@@ -61,6 +61,28 @@ html, body, #root {
     pointer-events: none;
 }
 
+.af-point {
+    position: fixed;
+    width: 36px;
+    height: 26px;
+    transform: translate(-50%, -50%);
+    border: 1.5px solid var(--accent);
+    border-radius: 2px;
+    pointer-events: none;
+    box-shadow: 0 0 0 1px #0006;
+}
+.af-point span {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    margin-top: 4px;
+    transform: translateX(-50%);
+    font: 10px var(--mono);
+    color: var(--accent);
+    text-shadow: 0 1px 2px #000;
+    white-space: nowrap;
+}
+
 .hint {
     position: fixed;
     left: 50%;

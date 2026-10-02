@@ -117,6 +117,7 @@ export type SensorName = keyof typeof SENSORS | 'Custom';
 export const SENSOR_NAMES = [...Object.keys(SENSORS), 'Custom'] as SensorName[];
 
 export const BLUR_QUALITIES = ['low', 'medium', 'high'] as const;
+export const FOCUS_MODES = ['manual', 'auto'] as const;
 
 export type Lens = {
     sensor: SensorName;
@@ -124,7 +125,9 @@ export type Lens = {
     sensorHeight: number;        // mm
     focalLength: number;         // mm
     fStop: number;
-    focusDistance: number;       // m
+    focusMode: typeof FOCUS_MODES[number];
+    focusDistance: number;       // m; manual focus, and where autofocus starts
+    afTransition: number;        // s, how long autofocus takes to reach a new distance
     metersPerUnit: number;
     dof: boolean;
     blurQuality: typeof BLUR_QUALITIES[number];
@@ -136,6 +139,7 @@ export const lensRanges = {
     focalLength: { min: 8, max: 300, step: 1 },
     fStop: { min: 0.95, max: 22, step: 0.05 },
     focusDistance: { min: 0.1, max: 50, step: 0.01 },
+    afTransition: { min: 0, max: 3, step: 0.05 },
     metersPerUnit: { min: 0.001, max: 100, step: 0.001 }
 } as const;
 
@@ -145,7 +149,9 @@ export const defaultLens = (): Lens => ({
     sensorHeight: 24,
     focalLength: 35,
     fStop: 2.8,
+    focusMode: 'manual',
     focusDistance: 3,
+    afTransition: 0.5,
     metersPerUnit: 1,
     dof: false,
     blurQuality: 'medium'
@@ -171,6 +177,7 @@ export function sceneLens(s: ExperienceSettings): Lens {
     if (!SENSOR_NAMES.includes(lens.sensor)) lens.sensor = 'Custom';
     if (lens.sensor !== 'Custom') [lens.sensorWidth, lens.sensorHeight] = SENSORS[lens.sensor];
     if (!BLUR_QUALITIES.includes(lens.blurQuality)) lens.blurQuality = 'medium';
+    if (!FOCUS_MODES.includes(lens.focusMode)) lens.focusMode = 'manual';
     const fov = s.cameras[0]?.initial.fov;
     if (!isObject(s.extras?.lens) && fov) lens.focalLength = focalForVerticalFov(fov, lens.sensorHeight);
     for (const key of Object.keys(lensRanges) as (keyof typeof lensRanges)[]) {
