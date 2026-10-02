@@ -150,9 +150,12 @@ camera moves, while a still builds up and once it is done.
   and blue from the unblurred image.
 - **Film grain** (Look, off by default): random grains, strongest in the
   mid-tones as on film. **Intensity**, **Size** (pixels; even large grain
-  stays irregular, never blocky) and **Color** (0 monochrome, 1 a separate
-  grain per colour channel). The grain is never averaged into a still; it
-  changes with every frame drawn and stands still once the viewer idles.
+  stays irregular, never blocky), **Color** (0 monochrome, 1 a separate
+  grain per colour channel) and **Animation**: 1 is film speed, a new
+  pattern 24 times a second (faster reads as video noise), lower is slower,
+  0 a fixed pattern. The grain is never averaged into a still, and it keeps
+  moving once the still is done or the viewer idles: only the last drawing
+  step is repeated then, without rendering the scene (the HUD stays `idle`).
 
 Changing either shows on the next frame without starting a still over.
 SuperSplat has no grain, so it is saved under `extras.look`:
@@ -160,7 +163,7 @@ SuperSplat has no grain, so it is saved under `extras.look`:
 ```json
 "extras": {
   "look": {
-    "grain": { "enabled": true, "intensity": 0.3, "size": 1, "color": 0.2 }
+    "grain": { "enabled": true, "intensity": 0.3, "size": 1, "color": 0.2, "animation": 1 }
   }
 }
 ```

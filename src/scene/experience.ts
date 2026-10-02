@@ -225,15 +225,17 @@ export type Grain = {
     intensity: number;           // 1 heavy
     size: number;                // grain size, pixels
     color: number;               // 0 monochrome, 1 independent per colour channel
+    animation: number;           // 0 a fixed pattern, 1 a new one 24 times a second, as film
 };
 
 export const grainRanges = {
     intensity: { min: 0, max: 1, step: 0.01 },
     size: { min: 0.5, max: 3, step: 0.05 },
-    color: { min: 0, max: 1, step: 0.01 }
+    color: { min: 0, max: 1, step: 0.01 },
+    animation: { min: 0, max: 1, step: 0.01 }
 } as const;
 
-export const defaultGrain = (): Grain => ({ enabled: false, intensity: 0.3, size: 1, color: 0 });
+export const defaultGrain = (): Grain => ({ enabled: false, intensity: 0.3, size: 1, color: 0, animation: 1 });
 
 export function sceneGrain(s: ExperienceSettings): Grain {
     const look = s.extras?.look;

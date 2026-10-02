@@ -51,9 +51,11 @@
 // frame is presented to the canvas from here. That last step also finishes
 // the image as a camera would after its lens: lateral chromatic aberration
 // and film grain, on the final image, the same for a moving view, a still
-// building up and a finished one. The grain is never averaged into a still;
-// it changes with every frame drawn and stands still once the viewer idles
-// (the canvas keeps the last image).
+// building up and a finished one. The grain is never averaged into a still.
+// It moves at film speed (24 new patterns a second at animation 1, slower
+// below, fixed at 0), timed by the clock rather than by frames, so it moves
+// the same while rendering, building up a still or idle: once the viewer
+// stops rendering, only this last step is repeated (`refresh`).
 
 import { APERTURE_GROUP } from './aperture';
 import type { Grain } from '../scene/experience';
@@ -191,7 +193,7 @@ const presentGLSL = /* glsl */ `
 // Film grain: random grains (a Gaussian dot each, at a random place in each
 // cell of a `size` pixel grid), so even large grains stay irregular instead
 // of blocky. Strongest in the mid-tones, as on film; per colour channel by
-// `color`. A new pattern every frame drawn.
+// `color`. The pattern is chosen by `still_seed`.
 const finishGLSL = /* glsl */ `
     varying vec2 uv0;
     uniform sampler2D still_image;
@@ -270,6 +272,10 @@ const ADD = new BlendState(true, BLENDEQUATION_ADD, BLENDMODE_ONE, BLENDMODE_ONE
 const settleFrames = (fade: number) =>
     fade >= 1 ? 1 : Math.max(1, Math.ceil(Math.log(1 / 64) / Math.log(1 - fade)));
 
+// New grain patterns a second at full animation: film runs at 24 frames a
+// second, each frame its own grain; faster reads as video noise.
+const GRAIN_RATE = 24;
+
 // The aberration scale at the image edge for a fringing intensity: the
 // outermost red and blue samples land where the engine's fringing puts
 // them in the corner (intensity / 1024 · 0.5², either way).
@@ -278,6 +284,10 @@ const FRINGING_SCALE = 1 / 2048;
 // cat's eye at full strength: the barrel disc is shifted by this many
 // aperture radii at the image corner (the overlap there is about 40 %)
 const CATS_EYE_SHIFT = 1;
+
+// the grain pattern for now: changes GRAIN_RATE × animation times a second
+const grainSeed = (g: Grain) =>
+    g.animation > 0 ? Math.floor(performance.now() / 1000 * GRAIN_RATE * g.animation) % 65536 : 0;
 
 function target(device: GraphicsDevice, name: string, format: number, depth: boolean, filter: number = FILTER_NEAREST) {
     const colorBuffer = new Texture(device, {
@@ -330,7 +340,8 @@ export class StillFrames {
     private lastShown = 0;                 // samples in the group being eased in
     private sinceGroup = 0;                // frames since that group came in
     private fade = 0.35;                   // part of the way to a new group per frame
-    private seed = 0;                      // grain pattern, new each frame drawn
+    private seed = -1;                     // grain pattern last drawn
+    private shownSource: RenderTarget | null = null;   // what is on the canvas, before finishing
     private avg: RenderTarget;             // their average, read by the passes after the scene pass
     private geo: RenderTarget;             // depth and coverage of the last moving frame
     private geoValid = false;
@@ -562,10 +573,22 @@ export class StillFrames {
         this.finish(this.display[0], finish);
     }
 
+    /**
+     * While the viewer does not render: draws the last image again with the
+     * next grain pattern once it is due. Only this step, no scene render.
+     */
+    refresh(finish: Finish) {
+        const g = finish.grain;
+        if (!this.shownSource || !g.enabled || g.intensity <= 0 || g.animation <= 0) return;
+        if (grainSeed(g) === this.seed) return;
+        this.finish(this.shownSource, finish);
+    }
+
     private finish(source: RenderTarget, finish: Finish) {
         const scope = this.device.scope;
         const g = finish.grain;
-        this.seed = (this.seed + 1) % 65536;
+        this.shownSource = source;
+        this.seed = grainSeed(g);
         scope.resolve('still_image').setValue(source.colorBuffer);
         scope.resolve('still_finish').setValue([
             finish.fringing * FRINGING_SCALE, g.enabled ? g.intensity : 0, g.size, g.color

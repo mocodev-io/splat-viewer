@@ -166,7 +166,8 @@ export function useLookPanel() {
             grain: { value: g.enabled, label: 'On' },
             grainIntensity: { value: g.intensity, ...grainRanges.intensity, label: 'Intensity' },
             grainSize: { value: g.size, ...grainRanges.size, label: 'Size' },
-            grainColor: { value: g.color, ...grainRanges.color, label: 'Color' }
+            grainColor: { value: g.color, ...grainRanges.color, label: 'Color' },
+            grainAnimation: { value: g.animation, ...grainRanges.animation, label: 'Animation' }
         }, { collapsed: true })
     }));
 
@@ -183,7 +184,9 @@ export function useLookPanel() {
         },
         fringing: { enabled: v.fringing, intensity: v.fringingIntensity }
     };
-    const grain: Grain = { enabled: v.grain, intensity: v.grainIntensity, size: v.grainSize, color: v.grainColor };
+    const grain: Grain = {
+        enabled: v.grain, intensity: v.grainIntensity, size: v.grainSize, color: v.grainColor, animation: v.grainAnimation
+    };
 
     // puts a loaded settings file into the panel
     const apply = (s: ExperienceSettings) => {
@@ -213,7 +216,8 @@ export function useLookPanel() {
             grain: gr.enabled,
             grainIntensity: gr.intensity,
             grainSize: gr.size,
-            grainColor: gr.color
+            grainColor: gr.color,
+            grainAnimation: gr.animation
         });
     };
 

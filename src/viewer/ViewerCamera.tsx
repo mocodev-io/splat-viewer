@@ -163,10 +163,10 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     // (stillFrames.ts), after everything the still accumulates: a change
     // shows on the next frame and does not start the still over.
     const fringing = fringingAmount(postEffects);
-    const { enabled, intensity, size, color } = grain;
+    const { enabled, intensity, size, color, animation } = grain;
     const finish: Finish = useMemo(
-        () => ({ fringing, grain: { enabled, intensity, size, color } }),
-        [fringing, enabled, intensity, size, color]
+        () => ({ fringing, grain: { enabled, intensity, size, color, animation } }),
+        [fringing, enabled, intensity, size, color, animation]
     );
     useEffect(() => {
         app.renderNextFrame = true;

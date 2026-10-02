@@ -170,6 +170,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         }
         if (s.mode === 'moving' && !accumulate && now - s.changedAt > 1000) app.autoRender = false;
 
+        // not rendering this frame: keep the grain moving on the last image
+        if (!app.autoRender && !app.renderNextFrame) sf.refresh(live.current.finish);
+
         const total = STILL_SAMPLES[lens.blurQuality];
         progress.current = s.mode === 'still' ? `still ${sf.count}/${total}` : s.mode === 'done' ? 'still' : '';
     });
