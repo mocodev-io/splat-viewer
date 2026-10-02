@@ -58,18 +58,22 @@ distance, no separate field of view.
     Switching back to manual keeps the distance it reached.
   - The distance is the depth of the splat or object under the point (the
     engine's picker) along the view direction, as a real focus plane is.
-- **Depth of field** follows the thin-lens formula, the circle of confusion
-  `c = f² / (N·(S − f)) · |d − S| / d`, so f-stop, focal length and focus
-  distance act as on a real camera, in front of the focus plane as well as
-  behind it. Each pixel gathers the scene points whose blur circle reaches
-  it, in HDR before tone mapping, in two layers: its own surface and what is
-  behind it, and the out-of-focus foreground in front of it, laid over by
-  how much of the pixel it covers. A blurred object in front of a sharp one
-  therefore fades out over its blur radius, as with a real lens, and bright
-  points become bokeh discs.
-- **Blur quality** sets the samples per pixel and the largest blur (low
-  1.5 %, medium 2.5 %, high 4 % of the image height). A long lens wide open
-  hits that cap; that is the limit, not a fault.
+- **Depth of field** works like a real lens: when the camera stands still,
+  the scene is rendered from many points spread over the aperture (its
+  size is focal length / f-stop) with the focus plane held in place, and
+  the images are averaged (accumulation-buffer DoF, Haeberli & Akeley
+  1990). Occlusion, blurred edges that turn see-through, bokeh and the
+  soft splat edges all come out right without any depth tricks. One
+  sample is added per frame and the still fades in over the first few;
+  the HUD shows the progress (`still 12/48`). While the camera moves, a
+  quick single-pass approximation stands in (the thin-lens circle of
+  confusion `c = f² / (N·(S − f)) · |d − S| / d`, gathered in the compose
+  shader).
+- **Still quality** is the number of aperture samples: low 16, medium 48,
+  high 128. More samples give smoother bokeh and take longer to finish.
+- When nothing changes the viewer stops rendering: after the still is
+  finished, or after a second without lens DoF. The HUD shows `idle`; any
+  change (camera, panel, focus, window size) starts rendering again.
 - **Scale**: splats have no scale of their own, and the DoF needs one.
   Press **Measure**, click both ends of something of known size (a door is
   about 2 m), enter that size as **Real length m** and press **Apply
@@ -151,7 +155,9 @@ src/
   viewer/Splat.tsx         one loaded splat; unmounting frees it
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
-  viewer/lensDof.ts        thin-lens DoF in the compose shader
+  viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
+  viewer/stillFrames.ts    accumulation buffer for the still DoF, presenting to the canvas
+  viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
   viewer/AutoFocus.tsx     continuous autofocus and the AF point
   viewer/ScenePointer.tsx  clicks in the image: AF point, measuring
   viewer/MeasureOverlay.tsx the measuring line
@@ -191,6 +197,10 @@ Notes:
   only for the scene depth and that hook, with its own blur passes at their
   cheapest. When bumping the engine, check that chunk still has the same
   place in the compose shader.
+- The still DoF averages the finished frames, after tone mapping and the
+  other effects, so very bright bokeh highlights come out a little less
+  bright than a true HDR average would make them. Each aperture sample is
+  a full render: quality is a trade between smoothness and time.
 - Splat edges are soft, and the depth there is a coverage-weighted mix of
   the near and the far surface that only reaches the object's real depth
   some pixels in; it can also land exactly on the focus plane. The DoF

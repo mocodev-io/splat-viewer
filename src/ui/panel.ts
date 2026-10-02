@@ -67,7 +67,7 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         afTransition: { value: d.afTransition, ...r.afTransition, label: 'AF transition s', render: auto },
         'AF center': button(() => onAfCenter()),
         dof: { value: d.dof, label: 'Depth of field' },
-        blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Blur quality', render: get => get('Lens.dof') as boolean },
+        blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Still quality', render: get => get('Lens.dof') as boolean },
         Scale: folder({
             metersPerUnit: { value: d.metersPerUnit, ...r.metersPerUnit, label: 'Meters / unit' },
             Measure: button(() => onMeasure()),

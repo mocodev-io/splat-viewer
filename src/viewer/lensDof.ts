@@ -1,4 +1,6 @@
-// Thin-lens depth of field, gathered in the engine's compose pass.
+// Thin-lens depth of field, gathered in the engine's compose pass. This is
+// the quick version shown while the camera moves; a still camera gets the
+// exact DoF accumulated over the aperture (stillFrames.ts, useStillDof.ts).
 //
 // The engine's own DoF blends a pre-blurred image over the sharp one by the
 // blur amount, which reads as "sharp plus haze", and it cannot let a blurred
@@ -16,7 +18,7 @@
 
 import { SHADERLANGUAGE_GLSL, ShaderChunks, type AppBase } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import type { BLUR_QUALITIES, Lens } from '../scene/experience';
+import type { Lens } from '../scene/experience';
 
 const composeDofGLSL = /* glsl */ `
     #ifdef DOF
@@ -108,6 +110,12 @@ const composeDofGLSL = /* glsl */ `
         // The result is the foreground laid over the pixel's own blur by that
         // coverage.
         vec3 applyDof(vec3 base, vec2 uv) {
+            // no gather: lens DoF off, or the camera is still and the DoF is
+            // accumulated over the aperture instead
+            if (lens_params.y <= 0.0) {
+                dCoc = vec2(0.0);
+                return base;
+            }
             float maxR = lens_params.z;
             float centerDepth = lensDepth(uv);
             vec2 center = lensCenterCoc(uv, centerDepth);
@@ -233,14 +241,10 @@ export function installLensDof(app: AppBase) {
 /** Normalized depth view: 0 off, 1 linear, 2 inverse. */
 export type DepthView = 0 | 1 | 2;
 
-// Samples and depth probes per quality step, and the largest blur radius as
-// a fraction of the image height: more samples keep a bigger blur smooth.
-type BlurQuality = typeof BLUR_QUALITIES[number];
-const QUALITY: Record<BlurQuality, { samples: number; probes: number; maxBlur: number }> = {
-    low: { samples: 24, probes: 12, maxBlur: 0.015 },
-    medium: { samples: 48, probes: 16, maxBlur: 0.025 },
-    high: { samples: 96, probes: 24, maxBlur: 0.04 }
-};
+// The gather only stands in while the camera moves (a still is accumulated
+// over the aperture, stillFrames.ts), so it has one fixed setting: samples,
+// depth probes and the largest blur radius as a fraction of the image height.
+const GATHER = { samples: 32, probes: 16, maxBlur: 0.025 };
 
 /**
  * Sets the engine's DoF to its cheapest (it only has to provide the scene
@@ -255,7 +259,7 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     dof.blurRingPoints = 1;
 
     const device = app.graphicsDevice;
-    const q = QUALITY[lens.blurQuality];
+    const q = GATHER;
     const f = lens.focalLength / 1000;                     // m
     const S = Math.max(focus, f * 1.01);                   // m, beyond the lens
     const cInf = (f * f) / (lens.fStop * (S - f));         // blur diameter at infinity on the sensor, m

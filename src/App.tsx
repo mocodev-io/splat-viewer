@@ -219,6 +219,11 @@ export function App() {
     }, [experience, debug.testObjects, framing]);
     const lighting = useMemo(() => sceneLighting(experience), [experience]);
 
+    // what the camera shows besides itself and the lens: a change restarts the
+    // still DoF and wakes the renderer up
+    const sceneKey = JSON.stringify([loaded, splatPanel.orientation, objects, lighting]);
+    const stillProgress = useRef('');
+
     // far plane just beyond the scene: more depth precision, and a depth view
     // that uses its whole range
     const farClip = framing ? framing.radius * 6 : 1000;
@@ -248,6 +253,9 @@ export function App() {
                     highPrecision={look.highPrecision}
                     postEffects={look.postEffects}
                     background={look.background}
+                    sceneKey={sceneKey}
+                    busy={!!loaded && !framing}
+                    progress={stillProgress}
                 />
                 <SceneLighting lighting={lighting} />
                 {loaded && (
@@ -276,7 +284,7 @@ export function App() {
                     focus={focus}
                 />
                 <MeasureOverlay points={measurePoints} metersPerUnit={lensPanel.lens.metersPerUnit} api={cameraApi} />
-                <FrameStats status={status} loaded={loaded} />
+                <FrameStats status={status} loaded={loaded} progress={stillProgress} />
             </Application>
             {hint && <div className="hint">{hint}</div>}
         </>

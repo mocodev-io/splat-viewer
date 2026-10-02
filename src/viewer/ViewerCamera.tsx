@@ -8,6 +8,7 @@ import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { horizontalFov, type CameraPose, type Lens, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
 import { updateLensDof, type DepthView } from './lensDof';
+import { useStillDof } from './useStillDof';
 
 export type ViewRequest = { pose: CameraPose; id: number };
 
@@ -37,12 +38,15 @@ type ViewerCameraProps = {
     highPrecision: boolean;
     postEffects: PostEffectSettings;
     background: Vec3Tuple;
+    sceneKey: string;                     // changes whenever the scene content changes
+    busy: boolean;                        // a splat is loading
+    progress: RefObject<string>;          // still accumulation status for the HUD
 };
 
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, background }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
@@ -158,11 +162,22 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     const depthView: DepthView = debugView !== 'depth' ? 0
         : depthRange === 'scene linear' ? 1 : depthRange === 'scene inverse' ? 2 : 0;
 
-    // focus and image size change between frames, so the lens is set per frame
+    // Still camera: the DoF is accumulated over the aperture (useStillDof.ts);
+    // anything shown changing starts it over.
+    const still = useStillDof({
+        app, controls, frame, lens, focus, progress, busy,
+        accumulate: lens.dof && debugView === 'image',
+        sceneKey: JSON.stringify([sceneKey, lens, tonemapping, highPrecision, postEffects, background, debugView, depthRange, farClip])
+    });
+
+    // Focus and image size change between frames, so the lens is set per
+    // frame. The gather is off for aperture samples: those are sharp views
+    // through one point of the lens.
     useAppEvent('prerender', () => {
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
-        updateLensDof(app, cf, lens, focus.current, lens.dof || debugView === 'blur amount', depthView);
+        const gather = (lens.dof || debugView === 'blur amount') && still.current.mode === 'moving';
+        updateLensDof(app, cf, lens, focus.current, gather, depthView);
     });
 
     return (
