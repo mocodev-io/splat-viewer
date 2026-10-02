@@ -37,6 +37,7 @@ const smoothstep = (a: number, b: number, x: number) => {
 //   per frame until the quality's count, fading in over the last moving
 //   frame; the camera is moved over the aperture (its shape gives the bokeh,
 //   aperture.ts) and its frustum sheared so the focus plane stays in place;
+//   the samples are averaged in HDR inside the frame (stillFrames.ts);
 // - done, or nothing changed for a second without lens DoF: no rendering at
 //   all until something changes (the canvas keeps the last image).
 //
@@ -49,7 +50,6 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         mode: 'moving' as Mode,
         start: false,
         jitter: null as null | { x: number; y: number; focus: number },
-        point: [0, 0] as [number, number],      // the lens point of this sample, units of the f-stop radius
         aperture: null as Aperture | null
     });
     const live = useRef({ lens, focus, accumulate, busy, sceneKey });
@@ -135,16 +135,23 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         const s = state.current;
         if (sf.resize() && s.mode !== 'moving') s.mode = 'moving';
         s.jitter = null;
-        if (s.mode !== 'still') return;
+        // the engine CameraFrame behind the script (not in its types)
+        const engine = (frame.current as unknown as { engineCameraFrame?: { renderPassCamera: unknown } } | null)?.engineCameraFrame;
+        if (s.mode !== 'still') {
+            // done: a stray render still shows the finished average
+            sf.prepare(engine, s.mode === 'done', null);
+            return;
+        }
         if (s.start) {
             sf.start();
             s.start = false;
         }
         const { lens, focus } = live.current;
         if (!s.aperture?.is(lens)) s.aperture = new Aperture(lens);
-        const [u, v] = s.point = s.aperture.sample(sf.count);
+        const [u, v] = s.aperture.sample(sf.count);
         const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
+        sf.prepare(engine, true, [u, v, lens.catsEye]);
     });
 
     useAppEvent('postrender', () => {
@@ -152,14 +159,13 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, bus
         if (!sf) return;
         const s = state.current;
         if (s.mode === 'still') {
-            sf.accumulate(s.point[0], s.point[1], live.current.lens.catsEye);
             sf.present(true, smoothstep(2, 10, sf.count));
             if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality]) {
                 s.mode = 'done';
                 app.autoRender = false;
             }
         } else {
-            sf.present(s.mode === 'done', 1);
+            sf.present(false, 1);
         }
     });
 

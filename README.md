@@ -62,7 +62,8 @@ distance, no separate field of view.
   the scene is rendered from many points spread over the aperture (its
   size is focal length / f-stop) with the focus plane held in place, and
   the images are averaged (accumulation-buffer DoF, Haeberli & Akeley
-  1990). Occlusion, blurred edges that turn see-through, bokeh and the
+  1990), in linear HDR before tone mapping, as a sensor collects light.
+  Occlusion, blurred edges that turn see-through, bright bokeh and the
   soft splat edges all come out right without any depth tricks. One
   sample is added per frame and the still fades in over the first few;
   the HUD shows the progress (`still 12/48`). While the camera moves, a
@@ -170,7 +171,7 @@ src/
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
   viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
-  viewer/stillFrames.ts    accumulation buffer for the still DoF, presenting to the canvas
+  viewer/stillFrames.ts    HDR accumulation for the still DoF (inside CameraFrame), presenting
   viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
   viewer/aperture.ts       aperture shapes (blades, anamorphic) and evenly spread lens points
   viewer/AutoFocus.tsx     continuous autofocus and the AF point
@@ -212,10 +213,16 @@ Notes:
   only for the scene depth and that hook, with its own blur passes at their
   cheapest. When bumping the engine, check that chunk still has the same
   place in the compose shader.
-- The still DoF averages the finished frames, after tone mapping and the
-  other effects, so very bright bokeh highlights come out a little less
-  bright than a true HDR average would make them. Each aperture sample is
-  a full render: quality is a trade between smoothness and time.
+- The still DoF averages the aperture samples in linear HDR, inside
+  CameraFrame: a pass of its own runs right after the scene pass and the
+  bloom downsample, the engine's DoF passes and the compose pass read the
+  average instead of the scene texture. Bright highlights spread over a
+  bokeh disc stay bright, and tone mapping, grading, vignette, sharpening
+  and bloom work on the averaged image. This relies on the engine's
+  `FramePassCameraFrame` internals (its scene pass, `frameUpdate` and the
+  passes reading the scene texture); check them when bumping the engine.
+  Each aperture sample is a full render: quality is a trade between
+  smoothness and time.
 - Splat edges are soft, and the depth there is a coverage-weighted mix of
   the near and the far surface that only reaches the object's real depth
   some pixels in; it can also land exactly on the focus plane. The DoF
