@@ -62,8 +62,11 @@ distance, no separate field of view.
   `c = f² / (N·(S − f)) · |d − S| / d`, so f-stop, focal length and focus
   distance act as on a real camera, in front of the focus plane as well as
   behind it. Each pixel gathers the scene points whose blur circle reaches
-  it, in HDR before tone mapping: blurred foreground spills softly over the
-  background, bright points become bokeh discs.
+  it, in HDR before tone mapping, in two layers: its own surface and what is
+  behind it, and the out-of-focus foreground in front of it, laid over by
+  how much of the pixel it covers. A blurred object in front of a sharp one
+  therefore fades out over its blur radius, as with a real lens, and bright
+  points become bokeh discs.
 - **Blur quality** sets the samples per pixel and the largest blur (low
   1.5 %, medium 2.5 %, high 4 % of the image height). A long lens wide open
   hits that cap; that is the limit, not a fault.
@@ -191,10 +194,11 @@ Notes:
 - Splat edges are soft, and the depth there is a coverage-weighted mix of
   the near and the far surface that only reaches the object's real depth
   some pixels in; it can also land exactly on the focus plane. The DoF
-  therefore lets a blurred object's blur reach about 1 % of the image height
-  further than its own size, so its soft rim blurs with it instead of
-  leaving a sharp, dark seam. An object in focus has no blur to spread and
-  keeps a crisp edge.
+  therefore spreads the blur of a nearer object over that band (about 1 %
+  of the image height), so its soft rim blurs with it instead of leaving a
+  sharp, dark seam. An object in focus has no blur to spread and keeps a
+  crisp edge. Dividing the depth by the coverage would fix this at the
+  source, but needs the image's alpha (High precision only); not done yet.
 - A new engine `Picker` returns a wrong point for its very first pick (seen
   with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post

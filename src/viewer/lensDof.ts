@@ -51,66 +51,80 @@ const composeDofGLSL = /* glsl */ `
             return min(abs(1.0 - lens_params.x / max(depth, 1e-4)) * lens_params.y, lens_params.z);
         }
 
-        float lensHash(vec2 p) {
-            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-        }
-
-        // The blur of this pixel itself. At a silhouette the splat depth is a
-        // coverage-weighted mix of the near and the far surface, and that mix
-        // can land right on the focus plane: a thin sharp outline around a
-        // blurred object. When the pixels around straddle the focus plane,
-        // this pixel is a mix of two surfaces and gets the smaller of their
-        // two blurs; an object that really is in focus keeps its crisp edge
-        // (its own blur is zero).
-        float lensCenterCoc(vec2 uv, float depth) {
+        // The blur of this pixel itself, and whether it belongs to the front.
+        //
+        // Splat edges are soft: over a band of pixels (lens_params.w) the depth
+        // is a coverage-weighted mix of the object and what lies behind it, so
+        // the rim of a blurred object would get too little blur (a dark,
+        // sharp-looking seam), and a mix that lands on the focus plane none at
+        // all. Two rules fix that:
+        // - near blur is dilated over that band: a pixel takes the blur of a
+        //   nearer neighbour within the band when it is larger (the rim is
+        //   mostly that object's own soft splats). An object in focus has no
+        //   blur to give, so its edge stays crisp;
+        // - when the neighbours straddle the focus plane, the pixel is a mix of
+        //   two surfaces and gets at least the smaller of their two blurs.
+        vec2 lensCenterCoc(vec2 uv, float depth) {
+            float size = lensCoc(depth);
+            float front = depth < lens_params.x ? 1.0 : 0.0;
             float dMin = depth;
             float dMax = depth;
-            for (int i = 0; i < 8; i++) {
-                float a = float(i) * 0.785398;
-                float d = lensDepth(uv + vec2(cos(a), sin(a)) * 3.0 * sceneTextureInvRes);
-                dMin = min(dMin, d);
-                dMax = max(dMax, d);
+            for (int ring = 1; ring <= 3; ring++) {
+                float r = lens_params.w * float(ring) / 3.0;
+                for (int i = 0; i < 8; i++) {
+                    float a = (float(i) + 0.5 * float(ring)) * 0.785398;
+                    float d = lensDepth(uv + vec2(cos(a), sin(a)) * r * sceneTextureInvRes);
+                    dMin = min(dMin, d);
+                    dMax = max(dMax, d);
+                    if (d < depth * 0.98) {
+                        float s = lensCoc(d);
+                        if (s > size) {
+                            size = s;
+                            front = d < lens_params.x ? 1.0 : front;
+                        }
+                    }
+                }
             }
-            float size = lensCoc(depth);
             if (dMin < lens_params.x && dMax > lens_params.x) {
                 size = max(size, min(lensCoc(dMin), lensCoc(dMax)));
             }
-            return size;
+            return vec2(size, front);
         }
 
-        // Scatter-as-gather on a golden-angle spiral: a sample counts when its
-        // own blur circle reaches this pixel. A blurred foreground therefore
-        // spills over a sharp background, while background behind a sharp
-        // edge is held back (no halos).
+        // Each pixel gathers samples spread evenly over a disc (golden-angle
+        // spiral, the same pattern for every pixel, so the blur is smooth
+        // rather than grainy) and sorts them into two layers:
+        //
+        // - its own surface and what lies behind it: a sample counts when its
+        //   blur circle reaches this pixel (background behind a sharper edge
+        //   is held back, so no halos);
+        // - nearer, blurred surfaces in front of it: their light is spread
+        //   over their blur disc, so each sample adds its share of coverage,
+        //   (disc area per sample) / (its blur disc area). Summed, that is how
+        //   much of this pixel the out-of-focus foreground covers: about half
+        //   right at its edge, fading to nothing one blur radius out, the way
+        //   a real lens shows a blurred object in front of a sharp one.
+        //
+        // The result is the foreground laid over the pixel's own blur by that
+        // coverage.
         vec3 applyDof(vec3 base, vec2 uv) {
             float maxR = lens_params.z;
             float centerDepth = lensDepth(uv);
-            float centerSize = lensCenterCoc(uv, centerDepth);
+            vec2 center = lensCenterCoc(uv, centerDepth);
+            float centerSize = center.x;
             dBlur = base;
 
-            // each pixel turns its pattern by its own angle: fine noise
-            // instead of visible sample directions
-            float spin = lensHash(gl_FragCoord.xy) * 6.2831853;
-
-            // How far to gather: this pixel's own blur, or further when a
-            // nearer, more blurred neighbour reaches over it. The widening
-            // fades in with how well the neighbour reaches, so spill edges move
-            // smoothly while focusing. The probes are spaced evenly in radius:
-            // a neighbour at distance r spills when its blur reaches r, so
-            // small radii matter as much as large ones.
-            // Splat edges are soft, and the depth there is a coverage-weighted
-            // mix that only reaches the object's real depth some pixels in
-            // (lens_params.w). A neighbour therefore counts as reaching when
-            // its blur plus that band does; otherwise the soft rim of a
-            // blurred object keeps a sharp, dark seam. An object in focus has
-            // no blur to spread, so its edge stays crisp.
-            // Sharp pixels with nothing blurred in front of them stop here,
-            // which is most of the frame.
+            // How far to look: this pixel's own blur, or further when a
+            // nearer, more blurred neighbour reaches over it. Probes are
+            // spaced evenly in radius; a neighbour counts when its blur plus
+            // the soft-edge band (lens_params.w) reaches, since the depth at a
+            // splat's soft rim only gets to the object's real depth some
+            // pixels in.
             float reach = centerSize;
             for (int i = 0; i < 32; i++) {
                 if (float(i) >= lens_quality.y) break;
                 float r = maxR * (float(i) + 0.5) / lens_quality.y;
-                float a = spin + float(i) * 2.39996323;
+                float a = float(i) * 2.39996323;
                 float d = lensDepth(uv + vec2(cos(a), sin(a)) * r * sceneTextureInvRes);
                 if (d < centerDepth) {
                     float size = lensCoc(d);
@@ -119,34 +133,57 @@ const composeDofGLSL = /* glsl */ `
             }
             reach = min(reach, maxR);
 
-            // the debug view shows the blur this pixel really gets: red behind
-            // the focus plane, green in front of it (or spilled over from it)
-            float amount = reach / maxR;
-            dCoc = centerDepth > lens_params.x && reach <= centerSize + 0.5 ? vec2(amount, 0.0) : vec2(0.0, amount);
+            if (reach < 0.25) {
+                dCoc = vec2(0.0);
+                return base;
+            }
 
-            if (reach < 0.25) return base;
-
-            // samples spread evenly over the disc of that reach
-            vec3 color = base;
-            float total = 1.0;
-            float angle = spin;
+            vec3 ownColor = base;
+            float ownTotal = 1.0;
+            vec3 nearColor = vec3(0.0);
+            float nearCover = 0.0;
+            float nearSize = 0.0;
+            float area = reach * reach / lens_quality.x;      // disc area per sample, over pi
+            float angle = 0.0;
             for (int i = 0; i < 256; i++) {
                 if (float(i) >= lens_quality.x) break;
                 float radius = reach * sqrt((float(i) + 0.5) / lens_quality.x);
                 vec2 tc = uv + vec2(cos(angle), sin(angle)) * radius * sceneTextureInvRes;
+                angle += 2.39996323;
                 vec3 sampleColor = texture2DLod(sceneTexture, tc, 0.0).rgb;
                 float sampleDepth = lensDepth(tc);
                 float sampleSize = lensCoc(sampleDepth);
-                // background does not spread over what is in front of it
-                if (sampleDepth > centerDepth) sampleSize = min(sampleSize, centerSize * 2.0);
-                float m = smoothstep(radius - 1.0, radius + 1.0, sampleSize);
-                color += mix(color / total, sampleColor, m);
-                total += 1.0;
-                angle += 2.39996323;
+
+                if (sampleDepth < centerDepth * 0.98) {
+                    // a nearer surface: covers this pixel where its blur reaches
+                    float w = smoothstep(radius - 1.0, radius + 1.0, sampleSize) * area / max(sampleSize * sampleSize, 0.25);
+                    nearColor += sampleColor * w;
+                    nearCover += w;
+                    nearSize += sampleSize * w;
+                } else {
+                    // this surface or behind it; behind is held to this pixel's blur
+                    if (sampleDepth > centerDepth) sampleSize = min(sampleSize, centerSize * 2.0);
+                    float m = smoothstep(radius - 1.0, radius + 1.0, sampleSize);
+                    ownColor += mix(ownColor / ownTotal, sampleColor, m);
+                    ownTotal += 1.0;
+                }
             }
-            dBlur = color / total;
-            // fades in over the first pixel of blur instead of switching on
-            return mix(base, dBlur, smoothstep(0.25, 1.25, reach));
+
+            // own blur, fading in over its first pixel instead of switching on
+            vec3 own = mix(base, ownColor / ownTotal, smoothstep(0.25, 1.25, centerSize));
+            float cover = clamp(nearCover, 0.0, 1.0);
+            dBlur = nearCover > 0.0 ? mix(own, nearColor / nearCover, cover) : own;
+
+            // Debug view: red is this pixel's own blur behind the focus plane,
+            // green in front of it or the blurred foreground over it. Squared
+            // against the gamma the debug output gets, so brightness follows
+            // the blur size.
+            float ownAmount = centerSize / maxR;
+            float nearAmount = nearCover > 0.0 ? cover * nearSize / nearCover / maxR : 0.0;
+            vec2 amount = center.y < 0.5 ? vec2(ownAmount, nearAmount) : vec2(0.0, max(ownAmount, nearAmount));
+            dCoc = pow(clamp(amount, 0.0, 1.0), vec2(2.2));
+
+            return dBlur;
         }
         #endif
     #endif
