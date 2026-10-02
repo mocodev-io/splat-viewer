@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
-    BLADE_COUNTS, BLUR_QUALITIES, defaultLens, FOCUS_MODES, lensRanges, ranges, SENSOR_NAMES, SENSORS, TONEMAPPING,
-    type ExperienceSettings, type Lens, type PostEffectSettings, type SensorName, type Tonemapping, type Vec3Tuple
+    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, FOCUS_MODES, grainRanges, lensRanges, ranges, sceneGrain,
+    SENSOR_NAMES, SENSORS, TONEMAPPING,
+    type ExperienceSettings, type Grain, type Lens, type PostEffectSettings, type SensorName, type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import { ORIENTATIONS, type Orientation } from '../viewer/Splat';
 
@@ -71,7 +72,15 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         afTransition: { value: d.afTransition, ...r.afTransition, label: 'AF transition s', render: auto },
         'AF center': button(() => onAfCenter()),
         dof: { value: d.dof, label: 'Depth of field' },
+        // the AF point exists only with autofocus and depth of field on
+        afFrame: { value: d.afFrame, label: 'AF frame', render: get => auto(get) && dof(get) },
         blurQuality: { value: d.blurQuality, options: [...BLUR_QUALITIES], label: 'Still quality', render: dof },
+        // how the still builds up: the over-blur that runs the first lens
+        // points together, and how fast each new group of samples fades in
+        Still: folder({
+            overblur: { value: d.overblur, ...r.overblur, label: 'Over-blur' },
+            stillFade: { value: d.stillFade, ...r.stillFade, label: 'Fade-in' }
+        }, { collapsed: true, render: dof }),
         // the bokeh shape; exact in the still, the quick DoF while moving stays round
         Bokeh: folder({
             blades: { value: d.blades as number, options: bladeOptions, label: 'Aperture' },
@@ -104,7 +113,10 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         bladeRoundness: v.bladeRoundness,
         bladeRotation: v.bladeRotation,
         anamorphic: v.anamorphic,
-        catsEye: v.catsEye
+        catsEye: v.catsEye,
+        overblur: v.overblur,
+        stillFade: v.stillFade,
+        afFrame: v.afFrame
     };
 
     // puts a loaded or computed lens into the panel
@@ -116,6 +128,7 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
 // Everything the scene settings file can hold about the look of the image.
 export function useLookPanel() {
     const pe = ranges;
+    const g = defaultGrain();
     const [v, set] = useControls('Look', () => ({
         tonemapping: { value: 'linear' as Tonemapping, options: [...TONEMAPPING], label: 'Tone mapping' },
         highPrecision: { value: false, label: 'High precision' },
@@ -143,9 +156,17 @@ export function useLookPanel() {
             vignetteOuter: { value: 0.75, ...pe.vignette.outer, label: 'Outer' },
             vignetteCurvature: { value: 1, ...pe.vignette.curvature, label: 'Curvature' }
         }, { collapsed: true }),
-        Fringing: folder({
+        // stored as SuperSplat's `fringing`; drawn as lateral chromatic
+        // aberration on the final image (stillFrames.ts)
+        'Chromatic aberration': folder({
             fringing: { value: false, label: 'On' },
             fringingIntensity: { value: 0.5, ...pe.fringing.intensity, label: 'Intensity' }
+        }, { collapsed: true }),
+        'Film grain': folder({
+            grain: { value: g.enabled, label: 'On' },
+            grainIntensity: { value: g.intensity, ...grainRanges.intensity, label: 'Intensity' },
+            grainSize: { value: g.size, ...grainRanges.size, label: 'Size' },
+            grainColor: { value: g.color, ...grainRanges.color, label: 'Color' }
         }, { collapsed: true })
     }));
 
@@ -162,10 +183,12 @@ export function useLookPanel() {
         },
         fringing: { enabled: v.fringing, intensity: v.fringingIntensity }
     };
+    const grain: Grain = { enabled: v.grain, intensity: v.grainIntensity, size: v.grainSize, color: v.grainColor };
 
     // puts a loaded settings file into the panel
     const apply = (s: ExperienceSettings) => {
         const p = s.postEffectSettings;
+        const gr = sceneGrain(s);
         set({
             tonemapping: s.tonemapping,
             highPrecision: s.highPrecisionRendering,
@@ -186,7 +209,11 @@ export function useLookPanel() {
             vignetteOuter: p.vignette.outer,
             vignetteCurvature: p.vignette.curvature,
             fringing: p.fringing.enabled,
-            fringingIntensity: p.fringing.intensity
+            fringingIntensity: p.fringing.intensity,
+            grain: gr.enabled,
+            grainIntensity: gr.intensity,
+            grainSize: gr.size,
+            grainColor: gr.color
         });
     };
 
@@ -195,6 +222,7 @@ export function useLookPanel() {
         highPrecision: v.highPrecision,
         background: fromHex(v.background),
         postEffects,
+        grain,
         apply
     };
 }

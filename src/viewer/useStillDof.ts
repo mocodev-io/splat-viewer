@@ -4,7 +4,7 @@ import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import type { Lens } from '../scene/experience';
-import { StillFrames } from './stillFrames';
+import { StillFrames, type Finish } from './stillFrames';
 import { Aperture, APERTURE_GROUP } from './aperture';
 
 /** Aperture samples per still, by quality. */
@@ -23,6 +23,7 @@ type StillDofOptions = {
     busy: boolean;                       // a splat is loading: keep rendering
     sceneKey: string;                    // changes whenever what is shown changes
     progress: RefObject<string>;         // short status for the HUD
+    finish: Finish;                      // aberration and grain on the way to the canvas
 };
 
 // The camera counts as standing still when the image moves less than this
@@ -34,9 +35,10 @@ const STEP_PX = 0.1;
 const DRIFT_PX = 0.5;
 
 // Over-blur: while the still builds up, its average gets a little of the
-// gather DoF on top (Blender EEVEE does the same), radius OVERBLUR / √n (at
+// gather DoF on top (Blender EEVEE does the same), radius overblur / √n (at
 // most 1, the moving view) of
-// each pixel's blur circle after n samples. The few aperture samples of the
+// each pixel's blur circle after n samples (`lens.overblur`, 1.5 by default;
+// 0 shows the pure accumulation). The few aperture samples of the
 // first frames would otherwise show as separate copies, stepped lines along
 // sharp edges; the extra blur, about the gap between lens points, runs them
 // together (N points over a disc of radius R lie about 2R / √N apart, so the
@@ -44,7 +46,7 @@ const DRIFT_PX = 0.5;
 // fill the aperture, so the image refines
 // smoothly from the moving view to the exact one; in-focus parts have no blur
 // circle and stay sharp.
-const OVERBLUR = 1.5;
+const overblurFor = (lens: Lens, shown: number) => Math.min(lens.overblur / Math.sqrt(Math.max(shown, 1)), 1);
 
 type Pose = { p: Vec3; r: Quat };
 const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
@@ -64,7 +66,7 @@ const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
 // Returns the state: the mode, `overblur`, the gather radius scale for this
 // frame (1 while moving), and `range`, the depth range for the normalized
 // depth view.
-export function useStillDof({ app, controls, frame, lens, focus, accumulate, depthRange, busy, sceneKey, progress }: StillDofOptions) {
+export function useStillDof({ app, controls, frame, lens, focus, accumulate, depthRange, busy, sceneKey, progress, finish }: StillDofOptions) {
     const still = useRef<StillFrames | null>(null);
     const state = useRef({
         other: '',                                   // everything but the camera pose that changes the image
@@ -78,8 +80,8 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         jitter: null as null | { x: number; y: number; focus: number },
         aperture: null as Aperture | null
     });
-    const live = useRef({ lens, focus, accumulate, depthRange, busy, sceneKey });
-    live.current = { lens, focus, accumulate, depthRange, busy, sceneKey };
+    const live = useRef({ lens, focus, accumulate, depthRange, busy, sceneKey, finish });
+    live.current = { lens, focus, accumulate, depthRange, busy, sceneKey, finish };
 
     useEffect(() => {
         const cc = controls.current;
@@ -187,7 +189,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         if (s.mode !== 'still') {
             // done: a stray render still shows the finished average
             sf.prepare(engine, s.mode === 'done', null, live.current.accumulate, range);
-            s.overblur = s.mode === 'done' ? Math.min(OVERBLUR / Math.sqrt(Math.max(sf.shown, 1)), 1) : 1;
+            s.overblur = s.mode === 'done' ? overblurFor(live.current.lens, sf.shown) : 1;
             return;
         }
         if (s.start) {
@@ -198,7 +200,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         // all samples in: keep rendering the average until the screen has eased in
         if (sf.count >= STILL_SAMPLES[lens.blurQuality]) {
             sf.prepare(engine, true, null, false, range);
-            s.overblur = Math.min(OVERBLUR / Math.sqrt(Math.max(sf.shown, 1)), 1);
+            s.overblur = overblurFor(lens, sf.shown);
             return;
         }
         if (!s.aperture?.is(lens)) s.aperture = new Aperture(lens);
@@ -208,23 +210,24 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         sf.prepare(engine, true, [u, v, lens.catsEye], false, range);
         // the average composed this frame shows the whole groups among count + 1 samples
         const shown = (sf.count + 1) - (sf.count + 1) % APERTURE_GROUP;
-        s.overblur = Math.min(OVERBLUR / Math.sqrt(Math.max(shown, 1)), 1);
+        s.overblur = overblurFor(lens, shown);
     });
 
     useAppEvent('postrender', () => {
         const sf = still.current;
         if (!sf) return;
         const s = state.current;
+        const { lens, finish } = live.current;
         if (s.mode === 'still') {
             // whole groups, eased in (stillFrames.ts); done once all are in
             // and the screen has caught up
-            sf.present(true);
-            if (sf.count >= STILL_SAMPLES[live.current.lens.blurQuality] && sf.settled) {
+            sf.present(true, lens.stillFade, finish);
+            if (sf.count >= STILL_SAMPLES[lens.blurQuality] && sf.settled) {
                 s.mode = 'done';
                 app.autoRender = false;
             }
         } else {
-            sf.present(false);
+            sf.present(false, lens.stillFade, finish);
         }
     });
 

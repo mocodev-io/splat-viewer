@@ -48,9 +48,15 @@
 // the first group is in, the last moving frame stays on screen.
 //
 // The camera renders into `frame` (CameraFrame composes into it), and every
-// frame is presented to the canvas from here.
+// frame is presented to the canvas from here. That last step also finishes
+// the image as a camera would after its lens: lateral chromatic aberration
+// and film grain, on the final image, the same for a moving view, a still
+// building up and a finished one. The grain is never averaged into a still;
+// it changes with every frame drawn and stands still once the viewer idles
+// (the canvas keeps the last image).
 
 import { APERTURE_GROUP } from './aperture';
+import type { Grain } from '../scene/experience';
 import {
     ADDRESS_CLAMP_TO_EDGE, BLENDEQUATION_ADD, BLENDMODE_ONE, BlendState, FILTER_LINEAR, FILTER_NEAREST,
     FramePass, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, PIXELFORMAT_RGBA8, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
@@ -173,12 +179,101 @@ const presentGLSL = /* glsl */ `
     }
 `;
 
+// The image as it goes to the canvas, finished like a camera's.
+//
+// Lateral chromatic aberration: the lens images each wavelength at a
+// slightly different scale, so colours separate towards the edges. The image
+// is sampled at a few scales around the centre and each sample counts for
+// the colours of its wavelength (red outermost, then green, blue innermost):
+// a soft spectral smear rather than a hard red and blue edge. Its strength
+// grows with the distance from the centre.
+//
+// Film grain: random grains (a Gaussian dot each, at a random place in each
+// cell of a `size` pixel grid), so even large grains stay irregular instead
+// of blocky. Strongest in the mid-tones, as on film; per colour channel by
+// `color`. A new pattern every frame drawn.
+const finishGLSL = /* glsl */ `
+    varying vec2 uv0;
+    uniform sampler2D still_image;
+    uniform vec4 still_finish;    // aberration scale at the edge, grain intensity, grain size (pixels), grain colour
+    uniform float still_seed;
+
+    highp uvec3 pcg3d(highp uvec3 v) {
+        v = v * 1664525u + 1013904223u;
+        v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+        v ^= v >> 16u;
+        v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+        return v;
+    }
+
+    vec3 rand3(highp uvec3 v) {
+        return vec3(pcg3d(v)) * (1.0 / 4294967296.0);
+    }
+
+    void main() {
+        vec3 c;
+        float k = still_finish.x;
+        if (k > 0.0) {
+            vec2 d = uv0 - 0.5;
+            vec3 sum = vec3(0.0);
+            vec3 weight = vec3(0.0);
+            for (int i = 0; i < 7; i++) {
+                float t = float(i) / 3.0 - 1.0;
+                vec3 w = max(vec3(0.0), 1.0 - abs(vec3(t) - vec3(1.0, 0.0, -1.0)));
+                sum += texture2D(still_image, 0.5 + d * (1.0 + t * k)).rgb * w;
+                weight += w;
+            }
+            c = sum / weight;
+        } else {
+            c = texture2D(still_image, uv0).rgb;
+        }
+
+        float amount = still_finish.y;
+        if (amount > 0.0) {
+            vec2 p = gl_FragCoord.xy / still_finish.z;
+            vec2 base = floor(p);
+            highp uint seed = uint(still_seed);
+            vec4 n = vec4(0.0);           // rgb per channel, a monochrome
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    vec2 cell = base + vec2(float(i), float(j));
+                    // offset so the cell index is never negative
+                    highp uvec2 id = uvec2(ivec2(cell) + 2);
+                    vec3 a = rand3(uvec3(id, seed));                 // place in the cell, monochrome value
+                    vec3 b = rand3(uvec3(id, seed + 0x9E3779B9u));  // per channel values
+                    vec2 o = p - (cell + a.xy);
+                    float w = exp(-2.0 * dot(o, o));                  // sigma half a cell
+                    n += vec4(b * 2.0 - 1.0, a.z * 2.0 - 1.0) * w;
+                }
+            }
+            // unit variance: values of variance 1/3, sum of w² about pi/4
+            n /= 0.5117;
+            float cc = still_finish.w;
+            vec3 g = mix(vec3(n.a), n.rgb, cc) / sqrt((1.0 - cc) * (1.0 - cc) + cc * cc);
+            float l = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+            c += g * amount * 0.12 * sqrt(4.0 * l * (1.0 - l));
+        }
+        gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }
+`;
+
+/** How the image is finished on its way to the canvas. */
+export type Finish = {
+    fringing: number;            // SuperSplat's fringing intensity, 0 off
+    grain: Grain;
+};
+
 const ADD = new BlendState(true, BLENDEQUATION_ADD, BLENDMODE_ONE, BLENDMODE_ONE);
 
-// How much of the way to a new group's image the screen goes each frame,
-// and after how many frames since the last group it counts as settled.
-const EASE = 0.35;
-const SETTLE_FRAMES = 10;
+// The screen counts as settled once it is within 1/64 of the last group's
+// image: `fade` is how much of the way it goes each frame.
+const settleFrames = (fade: number) =>
+    fade >= 1 ? 1 : Math.max(1, Math.ceil(Math.log(1 / 64) / Math.log(1 - fade)));
+
+// The aberration scale at the image edge for a fringing intensity: the
+// outermost red and blue samples land where the engine's fringing puts
+// them in the corner (intensity / 1024 · 0.5², either way).
+const FRINGING_SCALE = 1 / 2048;
 
 // cat's eye at full strength: the barrel disc is shifted by this many
 // aperture radii at the image corner (the overlap there is about 40 %)
@@ -234,6 +329,8 @@ export class StillFrames {
     private groups: RenderTarget;          // the sum as it was after the last whole group of samples
     private lastShown = 0;                 // samples in the group being eased in
     private sinceGroup = 0;                // frames since that group came in
+    private fade = 0.35;                   // part of the way to a new group per frame
+    private seed = 0;                      // grain pattern, new each frame drawn
     private avg: RenderTarget;             // their average, read by the passes after the scene pass
     private geo: RenderTarget;             // depth and coverage of the last moving frame
     private geoValid = false;
@@ -249,6 +346,7 @@ export class StillFrames {
     private captureShader: Shader;
     private restoreShader: Shader;
     private presentShader: Shader;
+    private finishShader: Shader;
     private device: GraphicsDevice;
     private scene: Texture | null = null;  // the scene texture of this frame
     private depth: Texture | null = null;  // the scene depth texture of this frame
@@ -271,13 +369,17 @@ export class StillFrames {
 
     /** Whether the screen has caught up with the last group. */
     get settled() {
-        return this.shown > 0 && this.sinceGroup >= SETTLE_FRAMES;
+        return this.shown > 0 && this.sinceGroup >= settleFrames(this.fade);
     }
 
     constructor(app: AppBase) {
         const device = this.device = app.graphicsDevice;
-        this.frame = target(device, 'StillFrame', PIXELFORMAT_RGBA8, true);
-        this.display = [target(device, 'StillDisplayA', PIXELFORMAT_RGBA8, false), target(device, 'StillDisplayB', PIXELFORMAT_RGBA8, false)];
+        // linear filtering: the aberration samples between pixels
+        this.frame = target(device, 'StillFrame', PIXELFORMAT_RGBA8, true, FILTER_LINEAR);
+        this.display = [
+            target(device, 'StillDisplayA', PIXELFORMAT_RGBA8, false, FILTER_LINEAR),
+            target(device, 'StillDisplayB', PIXELFORMAT_RGBA8, false, FILTER_LINEAR)
+        ];
         this.sum = target(device, 'StillSum', PIXELFORMAT_RGBA16F, false);
         this.groups = target(device, 'StillGroups', PIXELFORMAT_RGBA16F, false);
         this.avg = target(device, 'StillAverage', PIXELFORMAT_RGBA16F, false, FILTER_LINEAR);
@@ -299,6 +401,7 @@ export class StillFrames {
         this.captureShader = quadShader(device, 'StillCapture', captureGLSL);
         this.restoreShader = quadShader(device, 'StillRestore', restoreGLSL);
         this.presentShader = quadShader(device, 'StillPresent', presentGLSL);
+        this.finishShader = quadShader(device, 'StillFinish', finishGLSL);
     }
 
     /** Follows the canvas size; returns true when it changed (the still starts over). */
@@ -436,13 +539,14 @@ export class StillFrames {
     }
 
     /**
-     * To the canvas: the frame as composed, or for a still building up, the
-     * screen eased a step towards the newest whole group (the last moving
-     * frame until the first group is in).
+     * To the canvas, finished: the frame as composed, or for a still building
+     * up, the screen eased `fade` of the way towards the newest whole group
+     * (the last moving frame until the first group is in).
      */
-    present(still: boolean) {
+    present(still: boolean, fade: number, finish: Finish) {
+        this.fade = fade;
         if (!still) {
-            this.mix(null, this.frame, this.frame, 1);
+            this.finish(this.frame, finish);
             return;
         }
         if (this.shown > 0) {
@@ -451,11 +555,24 @@ export class StillFrames {
                 this.sinceGroup = 0;
             }
             const [current, next] = this.display;
-            this.mix(next, current, this.frame, EASE);
+            this.mix(next, current, this.frame, fade);
             this.display = [next, current];
             this.sinceGroup++;
         }
-        this.mix(null, this.display[0], this.display[0], 0);
+        this.finish(this.display[0], finish);
+    }
+
+    private finish(source: RenderTarget, finish: Finish) {
+        const scope = this.device.scope;
+        const g = finish.grain;
+        this.seed = (this.seed + 1) % 65536;
+        scope.resolve('still_image').setValue(source.colorBuffer);
+        scope.resolve('still_finish').setValue([
+            finish.fringing * FRINGING_SCALE, g.enabled ? g.intensity : 0, g.size, g.color
+        ]);
+        scope.resolve('still_seed').setValue(this.seed);
+        this.device.setBlendState(BlendState.NOBLEND);
+        drawQuadWithShader(this.device, null, this.finishShader);
     }
 
     private mix(dest: RenderTarget | null, base: RenderTarget, frame: RenderTarget, weight: number) {

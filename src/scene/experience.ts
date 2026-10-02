@@ -139,6 +139,10 @@ export type Lens = {
     bladeRotation: number;       // degrees
     anamorphic: number;          // horizontal squeeze, 1 spherical, 2 a 2x anamorphic
     catsEye: number;             // 0 none, 1 strong: bokeh turns to tangential ovals towards the corners
+    // the still (useStillDof.ts, stillFrames.ts)
+    overblur: number;            // gather on the average, × the gap between lens points; 0 off
+    stillFade: number;           // how much of the way to a new group of samples the screen goes per frame
+    afFrame: boolean;            // show the AF point
 };
 
 export const lensRanges = {
@@ -152,7 +156,9 @@ export const lensRanges = {
     bladeRoundness: { min: 0, max: 1, step: 0.01 },
     bladeRotation: { min: 0, max: 180, step: 1 },
     anamorphic: { min: 1, max: 2, step: 0.01 },
-    catsEye: { min: 0, max: 1, step: 0.01 }
+    catsEye: { min: 0, max: 1, step: 0.01 },
+    overblur: { min: 0, max: 2, step: 0.05 },
+    stillFade: { min: 0.05, max: 1, step: 0.01 }
 } as const;
 
 export const defaultLens = (): Lens => ({
@@ -171,7 +177,10 @@ export const defaultLens = (): Lens => ({
     bladeRoundness: 0,
     bladeRotation: 0,
     anamorphic: 1,
-    catsEye: 0
+    catsEye: 0,
+    overblur: 1.5,
+    stillFade: 0.35,
+    afFrame: true
 });
 
 const toDeg = (r: number) => r * 180 / Math.PI;
@@ -202,6 +211,37 @@ export function sceneLens(s: ExperienceSettings): Lens {
         lens[key] = clamp(lens[key], lensRanges[key]);
     }
     return lens;
+}
+
+// ---- our extras: film grain
+//
+// Grain sits in the film or sensor, not in the lens: it is added to the
+// final image, after depth of field, bloom and tone mapping, and is never
+// averaged into a still (stillFrames.ts). SuperSplat has no grain, so it
+// lives under `extras.look.grain`.
+
+export type Grain = {
+    enabled: boolean;
+    intensity: number;           // 1 heavy
+    size: number;                // grain size, pixels
+    color: number;               // 0 monochrome, 1 independent per colour channel
+};
+
+export const grainRanges = {
+    intensity: { min: 0, max: 1, step: 0.01 },
+    size: { min: 0.5, max: 3, step: 0.05 },
+    color: { min: 0, max: 1, step: 0.01 }
+} as const;
+
+export const defaultGrain = (): Grain => ({ enabled: false, intensity: 0.3, size: 1, color: 0 });
+
+export function sceneGrain(s: ExperienceSettings): Grain {
+    const look = s.extras?.look;
+    const grain = mergeKnown(defaultGrain(), isObject(look) ? look.grain : undefined);
+    for (const key of Object.keys(grainRanges) as (keyof typeof grainRanges)[]) {
+        grain[key] = clamp(grain[key], grainRanges[key]);
+    }
+    return grain;
 }
 
 // Authoring ranges from supersplat-viewer/src/schemas/ranges.ts

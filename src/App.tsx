@@ -45,6 +45,12 @@ function testObjects(pose: CameraPose): SceneObject[] {
     ];
 }
 
+// what else the loaded file keeps under `extras.look`, so saving keeps it
+function lookExtras(s: ExperienceSettings): Record<string, unknown> {
+    const look = s.extras?.look;
+    return typeof look === 'object' && look !== null && !Array.isArray(look) ? { ...look } : {};
+}
+
 function download(name: string, data: unknown) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -190,7 +196,11 @@ export function App() {
             background: { color: look.background },
             postEffectSettings: look.postEffects,
             cameras: [{ initial: pose }, ...experience.cameras.slice(1)],
-            extras: { ...experience.extras, lens: { ...lens, focusDistance: focus.current } }
+            extras: {
+                ...experience.extras,
+                lens: { ...lens, focusDistance: focus.current },
+                look: { ...lookExtras(experience), grain: look.grain }
+            }
         };
         download(settingsUrlFor(splatUrl(name)).split('/').pop()!, out);
         setStatus('settings saved (download) · put the file next to the splat');
@@ -252,6 +262,7 @@ export function App() {
                     tonemapping={look.tonemapping}
                     highPrecision={look.highPrecision}
                     postEffects={look.postEffects}
+                    grain={look.grain}
                     background={look.background}
                     sceneKey={sceneKey}
                     busy={!!loaded && !framing}
@@ -276,6 +287,7 @@ export function App() {
                 />
                 <AutoFocus
                     active={!!loaded && lens.dof && lens.focusMode === 'auto'}
+                    showFrame={lens.afFrame}
                     point={afPoint}
                     transition={lens.afTransition}
                     metersPerUnit={lens.metersPerUnit}

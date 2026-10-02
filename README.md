@@ -55,7 +55,8 @@ distance, no separate field of view.
     It measures only when the camera, the AF point or the scene changed,
     at most four times a second, and moves the focus to each new distance
     in **AF transition s** (0 is instant, longer is a slow focus pull).
-    Switching back to manual keeps the distance it reached.
+    Switching back to manual keeps the distance it reached. **AF frame**
+    hides the frame for a clean image; focusing goes on.
   - The distance is the depth of the splat or object under the point (the
     engine's picker) along the view direction, as a real focus plane is.
 - **Depth of field** works like a real lens: when the camera stands still,
@@ -80,14 +81,17 @@ distance, no separate field of view.
     centred, round and of the right size, so an out-of-focus object
     neither wanders, nor stretches one way and then another, nor grows
     and shrinks while samples come in; each new group eases in over a few
-    frames, so the still sharpens as one calm movement. Until the first
-    group is in (eight frames), the moving image stays on screen;
+    frames, so the still sharpens as one calm movement (**Still → Fade-in**,
+    0.05–1: the part of the way the screen goes each frame, 0.35 by
+    default, 1 shows each group at once). Until the first group is in
+    (eight frames), the moving image stays on screen;
   - an *over-blur* on top of the average, as in Blender EEVEE: the quick
     DoF with each blur circle scaled to 1.5 / √n after n samples (at most
     the full blur), about the gap between the lens points, so a few
     samples do not show as stepped copies along sharp edges. A little of
     it stays in the finished still (0.2 of the blur at medium), which
-    softens bokeh edges slightly;
+    softens bokeh edges slightly. **Still → Over-blur** (0–2) sets the
+    1.5; 0 turns it off and shows the pure accumulation, copies and all;
   - the over-blur uses the depth of the last moving frame (kept every
     frame), not the depth of each aperture sample, which is shifted with
     its lens point and would make the over-blur shake.
@@ -123,10 +127,43 @@ distance, no separate field of view.
   scale**; **Meters / unit** follows. Esc stops measuring, a third click
   starts a new measurement.
 
-The lens is saved under `extras.lens`. The `fov` in `cameras` stays filled
+The lens is saved under `extras.lens`, with the still settings
+(`overblur`, `stillFade`) and `afFrame`. The `fov` in `cameras` stays filled
 (the vertical angle over the sensor height) so SuperSplat still reads the
 file; a file without a lens, from SuperSplat say, gets the focal length
 that matches its `fov`.
+
+### Chromatic aberration and film grain
+
+Both finish the image the way a camera does after its lens, on the final
+image: after depth of field, bloom and tone mapping, and the same while the
+camera moves, while a still builds up and once it is done.
+
+- **Chromatic aberration** (Look): the lens images each colour at a
+  slightly different scale, so colours separate towards the edges. The
+  image is sampled at a few scales around the centre (red outermost, blue
+  innermost), which gives a soft spectral smear rather than a hard red and
+  blue edge, and blurred parts keep their colour edges blurred. It is
+  stored as SuperSplat's `fringing` (same 0–100 intensity, the outer colours
+  land where SuperSplat's fringing puts them in the corner), so the file
+  stays compatible; the engine's own fringing is not used, as it took red
+  and blue from the unblurred image.
+- **Film grain** (Look, off by default): random grains, strongest in the
+  mid-tones as on film. **Intensity**, **Size** (pixels; even large grain
+  stays irregular, never blocky) and **Color** (0 monochrome, 1 a separate
+  grain per colour channel). The grain is never averaged into a still; it
+  changes with every frame drawn and stands still once the viewer idles.
+
+Changing either shows on the next frame without starting a still over.
+SuperSplat has no grain, so it is saved under `extras.look`:
+
+```json
+"extras": {
+  "look": {
+    "grain": { "enabled": true, "intensity": 0.3, "size": 1, "color": 0.2 }
+  }
+}
+```
 
 ### Objects in the scene
 
@@ -203,6 +240,7 @@ src/
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
   viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
   viewer/stillFrames.ts    HDR accumulation for the still DoF (inside CameraFrame), presenting
+                           with chromatic aberration and film grain
   viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
   viewer/aperture.ts       aperture shapes (blades, anamorphic) and evenly spread lens points
   viewer/AutoFocus.tsx     continuous autofocus and the AF point

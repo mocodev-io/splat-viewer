@@ -6,6 +6,7 @@ import type { CameraApi } from './ViewerCamera';
 
 type AutoFocusProps = {
     active: boolean;
+    showFrame: boolean;                  // draw the AF point (focusing goes on without it)
     point: { x: number; y: number };     // AF point, 0..1 over the image
     transition: number;                  // s to (nearly) reach a new distance
     metersPerUnit: number;
@@ -18,7 +19,7 @@ type AutoFocusProps = {
 // under the AF point only when something changed (camera, AF point, scene),
 // at most four times a second, and moves the focus towards each measurement
 // over `transition` seconds, like a lens motor.
-export function AutoFocus({ active, point, transition, metersPerUnit, trigger, api, focus }: AutoFocusProps) {
+export function AutoFocus({ active, showFrame, point, transition, metersPerUnit, trigger, api, focus }: AutoFocusProps) {
     const target = useRef<number | null>(null);
     const last = useRef({ key: '', time: -Infinity, busy: false });
     const label = useRef<HTMLSpanElement>(null);
@@ -55,7 +56,7 @@ export function AutoFocus({ active, point, transition, metersPerUnit, trigger, a
         if (label.current) label.current.textContent = `${focus.current.toFixed(2)} m`;
     });
 
-    if (!active) return null;
+    if (!active || !showFrame) return null;
     return createPortal(
         <div className="af-point" style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }}>
             <span ref={label} />

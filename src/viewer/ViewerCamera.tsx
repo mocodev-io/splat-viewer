@@ -1,16 +1,23 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { Color, Picker, Vec3 } from 'playcanvas';
 import { Entity } from '@playcanvas/react';
 import { Camera, Script } from '@playcanvas/react/components';
 import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import { horizontalFov, type CameraPose, type Lens, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
+import { horizontalFov, type CameraPose, type Grain, type Lens, type PostEffectSettings, type Tonemapping, type Vec3Tuple } from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
 import { updateLensDof, type DepthView } from './lensDof';
 import { useStillDof } from './useStillDof';
+import type { Finish } from './stillFrames';
 
 export type ViewRequest = { pose: CameraPose; id: number };
+
+// what of the fringing reaches the image: its intensity when on
+const fringingAmount = (pe: PostEffectSettings) => (pe.fringing.enabled ? pe.fringing.intensity : 0);
+
+// the lens as far as it changes the accumulated still (the AF frame does not)
+const stillLens = ({ afFrame: _, ...rest }: Lens) => rest;
 
 export type CameraApi = {
     /** Where the camera is and what it orbits around, for saving the view. */
@@ -37,6 +44,7 @@ type ViewerCameraProps = {
     tonemapping: Tonemapping;
     highPrecision: boolean;
     postEffects: PostEffectSettings;
+    grain: Grain;
     background: Vec3Tuple;
     sceneKey: string;                     // changes whenever the scene content changes
     busy: boolean;                        // a splat is loading
@@ -46,7 +54,7 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, background, sceneKey, busy, progress }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
@@ -145,9 +153,24 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         cf.vignette.outer = pe.vignette.outer;
         cf.vignette.curvature = pe.vignette.curvature;
 
-        cf.fringing.enabled = pe.fringing.enabled;
-        cf.fringing.intensity = pe.fringing.intensity;
+        // the fringing is drawn as chromatic aberration on the final image
+        // (stillFrames.ts): the engine's comes after its DoF but takes red and
+        // blue from the sharp scene, so blurred parts got sharp colour edges
+        cf.fringing.enabled = false;
     }, [tonemapping, highPrecision, postEffects, lens.dof]);
+
+    // Aberration and grain finish the image on its way to the canvas
+    // (stillFrames.ts), after everything the still accumulates: a change
+    // shows on the next frame and does not start the still over.
+    const fringing = fringingAmount(postEffects);
+    const { enabled, intensity, size, color } = grain;
+    const finish: Finish = useMemo(
+        () => ({ fringing, grain: { enabled, intensity, size, color } }),
+        [fringing, enabled, intensity, size, color]
+    );
+    useEffect(() => {
+        app.renderNextFrame = true;
+    }, [app, finish]);
 
     // The lens: depth of field (lensDof.ts) and the debug views. The engine's
     // DoF provides the scene depth and the compose hook, so the debug views
@@ -171,7 +194,9 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         app, controls, frame, lens, focus, progress, busy,
         accumulate: lens.dof && debugView === 'image',
         depthRange: depthView > 0,
-        sceneKey: JSON.stringify([sceneKey, lens, tonemapping, highPrecision, postEffects, background, debugView, depthRange, farClip])
+        sceneKey: JSON.stringify([sceneKey, stillLens(lens), tonemapping, highPrecision, { ...postEffects, fringing: null },
+            background, debugView, depthRange, farClip]),
+        finish
     });
 
     // Focus and image size change between frames, so the lens is set per
