@@ -501,24 +501,3 @@ export function parseExperience(json: unknown): { settings: ExperienceSettings; 
     if (isObject(json.extras)) settings.extras = json.extras;
     return { settings };
 }
-
-// Where the settings of a splat live: `scene.json` next to `scene.sog` or
-// `scene.ply`; for a folder (unbundled SOG, LOD streaming) `settings.json`
-// inside it, as SuperSplat exports it.
-export function settingsUrlFor(splatUrl: string): string {
-    if (/\/(lod-)?meta\.json$/i.test(splatUrl)) {
-        return splatUrl.replace(/[^/]+$/, 'settings.json');
-    }
-    return splatUrl.replace(/(\.compressed)?\.(ply|sog)$/i, '.json');
-}
-
-export async function loadExperience(splatUrl: string): Promise<{ settings: ExperienceSettings; found: boolean; warning?: string }> {
-    try {
-        const res = await fetch(settingsUrlFor(splatUrl), { headers: { Accept: 'application/json' } });
-        if (!res.ok) return { settings: defaultExperience(), found: false };
-        const { settings, warning } = parseExperience(await res.json());
-        return { settings, found: true, warning };
-    } catch (err) {
-        return { settings: defaultExperience(), found: false, warning: `could not read settings: ${String(err)}` };
-    }
-}

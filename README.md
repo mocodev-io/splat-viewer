@@ -15,11 +15,17 @@ services:
       - "8096:80"
     volumes:
       - /path/to/splats:/splats:ro
+      - /path/to/settings:/settings
     restart: unless-stopped
 ```
 
 Open `http://<host>:8096`, pick a splat and press **Load**. **Unload** frees
-it again.
+it again. Loading another splat leaves every setting as it is (until the
+page is reloaded); the camera frames the new splat.
+
+The settings folder must be writable for the container's nginx user (uid
+101), for example `chown 101 /path/to/settings`. Without it the viewer
+works the same, only saving settings fails.
 
 ### The splats folder
 
@@ -27,20 +33,27 @@ it again.
 - folders with unbundled SOG or LOD streaming output (`meta.json` /
   `lod-meta.json`)
 
-Each splat can have a **scene settings file** next to it: `scene.json` for
-`scene.sog` / `scene.ply`, or `settings.json` inside a SOG / LOD folder.
-That file is SuperSplat's *Experience Settings v2*, the JSON that
+### The settings folder
+
+**Save settings** (Scene → Settings) writes everything set in the panels
+to the settings folder under the name in *Save as* (`<name>.json`; an
+existing name asks before overwriting). **Load settings** puts the file
+chosen in the *Settings* list back into the panels, for whichever splat is
+loaded. The camera position is not saved.
+
+The files are SuperSplat's *Experience Settings v2*, the JSON that
 [SuperSplat Studio](https://developer.playcanvas.com/user-manual/supersplat/studio/)
-writes, so a scene prepared there opens here with the same start camera,
-tone mapping, background and post effects. Without a settings file the
-viewer frames the splat itself.
+writes, so tone mapping, background and post effects from a file made there
+load here too (put it in the settings folder). Our own settings go under
+`extras`; anything else a loaded file holds (annotations, tracks, other
+extras) is kept when it is saved again.
 
 ### The panels
 
 They follow how a camera is put together:
 
-- **Scene**: the splat file, its orientation, the background, Load /
-  Unload / Reset view / Save settings, and **Scale**.
+- **Scene**: the splat with Load / Unload, its orientation, the
+  background, **Settings** (load and save), and **Scale**.
 - **Camera**: the sensor, and **Framing** (passepartout).
 - **Lens**: focal length and f-stop; **Focus**, **Depth of field**,
   **Bokeh**, and **Optics** (chromatic aberration, vignette, diffusion).
@@ -49,10 +62,6 @@ They follow how a camera is put together:
 - **Debug**.
 
 Where a control sits in the panel does not change how it is saved.
-
-**Save settings** (Scene) downloads the current look, view and lens as
-such a file, keeping anything else the loaded file had (annotations, tracks,
-other extras). Put it next to the splat.
 
 ### The lens
 
@@ -405,15 +414,28 @@ looks, to check how objects and splats cover each other.
 
 ## Controls
 
-The engine's own `CameraControls` script: left drag orbits, right drag or
-W A S D flies, middle / shift drag pans, the wheel zooms.
+The engine's own `CameraControls` script, as the SuperSplat viewer uses
+it, with a bar at the top left:
+
+- **Auto / Orbit / Fly**: *Auto* switches by what you use, as the engine
+  does: left drag orbits, middle or Shift drag pans, the wheel zooms, right
+  drag or W A S D (Q / E down / up) flies. *Orbit* and *Fly* keep to one:
+  in Fly every drag looks around.
+- **Speed**: the fly speed, scaled to the size of the splat, in powers of
+  two (double click the slider for ×1). Shift is faster, Ctrl slower.
+- **Frame** (or F): the whole splat in view.
+- A **double click** in the image turns the camera towards that point,
+  which becomes the orbit point.
+
+Typing in the panel does not move the camera.
 
 ## How it is put together
 
 ```
 src/
-  App.tsx                  state: which splat, its settings, the view
-  scene/experience.ts      Experience Settings v2: types, defaults, ranges, loader
+  App.tsx                  state: which splat, the settings, the view
+  scene/experience.ts      Experience Settings v2: types, defaults, ranges, parser
+  scene/presets.ts         the /settings folder: list, load, save (PUT)
   scene/films.ts           film stock profiles (colour and black and white)
   scene/splats.ts          the /splats folder listing
   viewer/SplatSetup.tsx    scene-wide splat settings
@@ -427,10 +449,11 @@ src/
   viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
   viewer/aperture.ts       aperture shapes (blades, anamorphic) and evenly spread lens points
   viewer/AutoFocus.tsx     continuous autofocus and the AF point
-  viewer/ScenePointer.tsx  clicks in the image: AF point, measuring
+  viewer/ScenePointer.tsx  clicks in the image: AF point, measuring, orbit point
   viewer/MeasureOverlay.tsx the measuring line
   viewer/FrameStats.tsx    fps / status line
   ui/panel.ts              Leva panel
+  ui/NavBar.tsx            orbit / fly, speed, frame
 ```
 
 Principles this is built on:

@@ -32,38 +32,54 @@ const fromHex = (hex: string): Vec3Tuple => {
 
 type ScenePanelProps = {
     splats: string[];
+    presets: string[];
     onLoad: (name: string) => void;
     onUnload: () => void;
-    onResetView: () => void;
-    onSave: () => void;
+    onLoadSettings: (name: string) => void;
+    onSaveSettings: (name: string) => void;
 };
 
-// Scene: which splat, how it stands, what is behind it. Loading is always an
-// explicit button press. (Its scale is added by the lens panel, which owns it.)
-export function useScenePanel({ splats, onLoad, onUnload, onResetView, onSave }: ScenePanelProps) {
+// Scene: which splat, how it stands, what is behind it, and the settings
+// files. Loading is always an explicit button press; a splat loads without
+// touching any setting, so everything set stays as it is from one splat to
+// the next. (Its scale is added by the lens panel, which owns it.)
+export function useScenePanel({ splats, presets, onLoad, onUnload, onLoadSettings, onSaveSettings }: ScenePanelProps) {
     const [values, set] = useControls(() => ({
         Scene: folder({
-            file: { value: splats[0] ?? '', options: splats, label: 'File' },
-            orientation: { value: 'x180' as Orientation, options: [...ORIENTATIONS], label: 'Orientation' },
-            background: { value: '#000000', label: 'Background' },
+            file: { value: splats[0] ?? '', options: splats, label: 'Splat' },
             // read inside the handlers through `get`, so the buttons see the current choice
             Load: button(get => onLoad(get('Scene.file') as string)),
             Unload: button(() => onUnload()),
-            'Reset view': button(() => onResetView()),
-            'Save settings': button(() => onSave())
+            orientation: { value: 'x180' as Orientation, options: [...ORIENTATIONS], label: 'Orientation' },
+            background: { value: '#000000', label: 'Background' },
+            // everything in the panels, saved in the settings folder by name
+            Settings: folder({
+                preset: { value: presets[0] ?? '', options: presets, label: 'Settings' },
+                'Load settings': button(get => onLoadSettings(get('Scene.Settings.preset') as string)),
+                name: { value: '', label: 'Save as' },
+                'Save settings': button(get => onSaveSettings(get('Scene.Settings.name') as string))
+            }, { order: 5 })
         }, { order: ORDER.scene })
-    }), [splats, onLoad, onUnload, onResetView, onSave]);
+    }), [splats, presets, onLoad, onUnload, onLoadSettings, onSaveSettings]);
 
-    // the list arrives after the panel exists; pick its first entry then
+    // the lists arrive after the panel exists; pick their first entry then
     useEffect(() => {
         if (splats.length && !splats.includes(values.file as string)) set({ file: splats[0] });
     }, [splats, values.file, set]);
+    useEffect(() => {
+        if (presets.length && !presets.includes(values.preset as string)) set({ preset: presets[0] });
+    }, [presets, values.preset, set]);
 
     return {
         orientation: values.orientation as Orientation,
         background: fromHex(values.background as string),
-        // puts a loaded file's background into the panel
-        applyBackground: (c: Vec3Tuple) => set({ background: toHex(c) })
+        // puts loaded settings into the panel
+        apply: (s: { background?: Vec3Tuple; orientation?: Orientation }) => set({
+            ...(s.background ? { background: toHex(s.background) } : {}),
+            ...(s.orientation ? { orientation: s.orientation } : {})
+        }),
+        // after a save: the new file chosen in the list
+        choosePreset: (name: string) => set({ preset: name, name })
     };
 }
 

@@ -18,6 +18,15 @@ import type { Finish, FinishVignette } from './stillFrames';
 
 export type ViewRequest = { pose: CameraPose; id: number };
 
+/**
+ * How the mouse and keys move the camera (the engine's CameraControls):
+ * auto switches between orbit (left drag, wheel) and fly (right drag, WASD)
+ * by what is used, as the engine does; orbit or fly keeps to one. `speed`
+ * is the fly speed, scene units per second.
+ */
+export type NavMode = 'auto' | 'orbit' | 'fly';
+export type Navigation = { mode: NavMode; speed: number };
+
 // what of the fringing reaches the image: its intensity when on
 const fringingAmount = (pe: PostEffectSettings) => (pe.fringing.enabled ? pe.fringing.intensity : 0);
 
@@ -45,10 +54,13 @@ export type CameraApi = {
     viewDepth: (p: Vec3Tuple) => number;
     /** A world point in canvas CSS pixels; `behind` when it is behind the camera. */
     toScreen: (p: Vec3Tuple) => { x: number; y: number; behind: boolean };
+    /** Turns the camera towards a point, which becomes what it orbits around. */
+    lookAt: (p: Vec3Tuple) => void;
 };
 
 type ViewerCameraProps = {
     view: ViewRequest | null;             // a new id moves the camera there
+    navigation: Navigation;
     lens: Lens;
     focus: RefObject<number>;             // live focus distance, m (manual or autofocus)
     farClip: number;
@@ -72,7 +84,7 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, halation, film, lensVignette, viewport, background, sceneKey, busy, progress }: ViewerCameraProps) {
+export function ViewerCamera({ view, navigation, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, halation, film, lensVignette, viewport, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
     const shape = frameShape(lens, viewport.frameStyle);
     // the film works on the image only; debug views show the engine's own output
@@ -126,6 +138,10 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
             toScreen: p => {
                 const s = entity().camera!.worldToScreen(new Vec3(...p));
                 return { x: s.x, y: s.y, behind: s.z < 0 };
+            },
+            lookAt: p => {
+                controls.current?.look(new Vec3(...p));
+                app.renderNextFrame = true;
             }
         };
         return () => {
@@ -134,6 +150,21 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
             pickers.coarse?.destroy();
         };
     }, [api, app]);
+
+    // orbit / fly and the speed; a mode is enabled before the other is
+    // disabled, as CameraControls needs one of them on at all times
+    useEffect(() => {
+        const cc = controls.current;
+        if (!cc) return;
+        const { mode, speed } = navigation;
+        if (mode !== 'fly') cc.enableOrbit = true;
+        if (mode !== 'orbit') cc.enableFly = true;
+        if (mode === 'orbit') cc.enableFly = false;
+        if (mode === 'fly') cc.enableOrbit = false;
+        cc.moveSpeed = speed;
+        cc.moveFastSpeed = speed * 3;
+        cc.moveSlowSpeed = speed / 4;
+    }, [navigation]);
 
     // move to a requested pose; CameraControls animates there
     useEffect(() => {

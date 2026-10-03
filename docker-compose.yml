@@ -5,6 +5,8 @@ services:
     ports:
       - "8096:80"
     volumes:
-      # .ply / .sog files, SOG / LOD folders, and optional <name>.json scene settings
+      # .ply / .sog files, SOG / LOD folders
       - /mnt/user/appdata/splat-viewer/splats:/splats:ro
+      # saved settings (.json); writable for the container's nginx user (uid 101)
+      - /mnt/user/appdata/splat-viewer/settings:/settings
     restart: unless-stopped

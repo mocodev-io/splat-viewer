@@ -17,6 +17,8 @@ declare module 'playcanvas/scripts/esm/camera-controls.mjs' {
         /** Animate to look at `focus` from `position`. */
         reset(focus: Vec3, position: Vec3): void;
         focus(point: Vec3, resetZoom?: boolean): void;
+        /** Animate to turn towards `point` from where the camera is; it becomes the orbit point. */
+        look(point: Vec3, resetZoom?: boolean): void;
     }
 }
 

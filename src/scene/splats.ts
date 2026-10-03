@@ -6,7 +6,7 @@ const SPLAT_META = /^(lod-)?meta\.json$/i;
 
 type ListingEntry = { name: string; type: 'file' | 'directory' };
 
-async function listFolder(path: string): Promise<ListingEntry[]> {
+export async function listFolder(path: string): Promise<ListingEntry[]> {
     try {
         const res = await fetch(path, { headers: { Accept: 'application/json' } });
         if (!res.ok) return [];
