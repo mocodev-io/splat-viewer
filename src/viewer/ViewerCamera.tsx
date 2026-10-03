@@ -236,11 +236,13 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         verifyShaderChunks(app);
         setLogEncode(app, filmOn);
         const cf = frame.current;
-        if (!cf || !cf.dof.enabled) return;
         const s = still.current;
+        const pass = s.frames?.dof ?? null;
+        if (pass) pass.wanted = false;
+        if (!cf || !cf.dof.enabled) return;
         const blur = lens.dof || debugView === 'blur amount' ? s.overblur : 0;
         if (!s.range) return;
-        updateLensDof(app, cf, lens, shape, focus.current, blur, s.mode !== 'moving', depthView, s.range);
+        updateLensDof(app, cf, pass, lens, shape, focus.current, blur, s.mode !== 'moving', depthView, s.range);
     });
 
     return (

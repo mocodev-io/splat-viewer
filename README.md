@@ -104,9 +104,8 @@ distance, no separate field of view.
   Occlusion, blurred edges that turn see-through, bright bokeh and the
   soft splat edges all come out right without any depth tricks. One
   sample is added per frame; the HUD shows the progress (`still 12/48`).
-  While the camera moves, a quick single-pass approximation stands in
-  (the thin-lens circle of confusion `c = f² / (N·(S − f)) · |d − S| / d`,
-  gathered in the compose shader).
+  While the camera moves, a quick DoF shows the same lens (below), so you
+  always look through it and the still only refines.
 - The still starts as soon as the image stops moving: the camera counts
   as still when the image shifts less than 0.1 px from one frame to the
   next, so the eased-out tail of the camera controls does not hold it up
@@ -132,13 +131,29 @@ distance, no separate field of view.
   - the over-blur uses the depth of the last moving frame (kept every
     frame), not the depth of each aperture sample, which is shifted with
     its lens point and would make the over-blur shake.
-- The quick DoF while moving keeps a smooth sample pattern and a blur of
-  at most 2.5 % of the image height: a larger radius with a single-pass
-  gather makes the blur heavy and lets the sharp outline of a blurred
-  foreground show through. The over-blur on a still may reach 8 % and turns
-  its sample pattern per pixel (interleaved gradient noise), so its large
-  radius shows a fine grain that the averaged still hardly shows, rather
-  than stepped lines.
+- The quick DoF works the way games do it (Unreal's Diaphragm DOF, the
+  Call of Duty post-processing of Jimenez): a pass of its own at half
+  resolution right after the scene, then a blend at full resolution.
+  - Each pixel gets its blur from the thin-lens circle of confusion
+    `c = c∞ · |ratio − S / d|` (ratio from the focus plane: curvature,
+    tilt), and gathers the points whose blur reaches it through a kernel
+    shaped like the lens at that pixel, with the still's own formulas: the
+    aperture's lens points (round, blades, anamorphic), the cat's eye mask,
+    astigmatism (the kernel stretched along or across the radius), the
+    bubble weight per lens point, and fringing (a blur per colour).
+  - Two layers: everything blurred in front of the focus, the pixel's own
+    surface included, laid over the rest by how much of the pixel its blur
+    covers, so a blurred foreground turns see-through at its edge on both
+    sides; the rest gathered where its blur reaches, held back behind a
+    sharper pixel so there are no halos.
+  - The blur reaches up to 8 % of the frame height, as far as the still's.
+    Sharp parts stay at full resolution.
+  - The same pass gives the shrinking over-blur on a still, with its
+    pattern turned per pixel (interleaved gradient noise), so few samples
+    show as fine grain rather than stepped lines.
+  - Still better in the still: what lies exactly behind a blurred edge,
+    and very large blur right next to a sharp edge (the half resolution
+    can leave a thin seam there).
 - **Still quality** is the number of aperture samples: low 16, medium 48,
   high 128. More samples give smoother bokeh and take longer to finish.
 - **Bokeh** (with DoF on) is the shape of the aperture the still is
@@ -165,7 +180,8 @@ distance, no separate field of view.
     are weighted by their radius; over each group of eight the weights
     average out, so the brightness stays the same.
 
-  The quick DoF while the camera moves stays round, without fringing.
+  The quick DoF while the camera moves shows the same shape, fringing and
+  bubble.
 - **Focus plane** (with DoF on): where the sharp plane lies.
   - **Field curvature** (−1..1): the plane bends into a bowl, the focus
     coming nearer towards the corners (further at negative values), in
@@ -181,7 +197,7 @@ distance, no separate field of view.
     different distances, more so towards the corners, so the blur stretches
     in one direction: outwards from the centre (radial, −, the zoom-like
     smear of old portrait and large-format lenses) or along circles around
-    it (swirl, +, as a Helios 44). The middle stays sharp. Still only; with
+    it (swirl, +, as a Helios 44). The middle stays sharp. With
     field curvature and cat's eye it builds the full vintage look.
   - The focus distance (and Focus m) is the one in the middle of the frame;
     autofocus sets it so that the AF point itself is sharp, and its label
@@ -397,7 +413,7 @@ src/
   viewer/Splat.tsx         one loaded splat; unmounting frees it
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
-  viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
+  viewer/lensDof.ts        quick DoF while moving (half-size pass, compose blend), debug depth views
   viewer/engine.ts         engine internals the viewer uses, each checked
   viewer/stillFrames.ts    HDR accumulation for the still DoF (inside CameraFrame), presenting
                            with aberration, vignette, film type, grain and passepartout
@@ -474,10 +490,9 @@ Notes:
   own pass, so they are not affected.
 - Where a soft edge lies in front of something, its depth is a mix of the
   two surfaces and can land exactly on the focus plane. The quick DoF
-  therefore also spreads the blur of a nearer object over a band of about
-  1 % of the image height, so its soft rim blurs with it instead of leaving
-  a sharp, dark seam. An object in focus has no blur to spread and keeps a
-  crisp edge.
+  takes the nearest of the four depths each half-size pixel covers, so a
+  blurred object's soft rim blurs with it; an object in focus has no blur
+  to spread and keeps a crisp edge.
 - A new engine `Picker` returns a wrong point for its very first pick (seen
   with splats); the viewer picks twice the first time.
 - Unlike the SuperSplat viewer, colours stay in linear HDR through the post

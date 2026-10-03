@@ -6,6 +6,7 @@ import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { frameRect, type FrameShape, type Lens } from '../scene/experience';
 import { StillFrames, type Finish, type StillSample } from './stillFrames';
 import { Aperture, APERTURE_GROUP } from './aperture';
+import { FRINGING_MM } from './lensDof';
 import { cameraFramePass, depthIsReciprocal, engineProblems, stillHooksOk } from './engine';
 
 /** Aperture samples per still, by quality. */
@@ -50,12 +51,6 @@ const DRIFT_PX = 0.5;
 // circle and stay sharp.
 const overblurFor = (lens: Lens, shown: number) => Math.min(lens.overblur / Math.sqrt(Math.max(shown, 1)), 1);
 
-// Bokeh fringing (longitudinal chromatic aberration): the colours come to a
-// focus at slightly different distances behind the lens. At full strength
-// green focuses 0.5 mm off red and blue on the image side, a fast lens wide
-// open made clearly visible; on the subject side that shifts 1 / distance by
-// δ / f² (less for longer lenses), the same at any focus distance.
-const FRINGING_MM = 0.5;
 
 // The aperture sample for StillFrames: the lens point and its weight, and
 // what the shifted focus plane needs. Seen from a lens point moved by j in
@@ -125,7 +120,8 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         overblur: 1,
         range: null as null | { texture: Texture; ready: boolean },   // for the normalized depth view
         jitter: null as null | { x: number; y: number; focus: number },
-        aperture: null as Aperture | null
+        aperture: null as Aperture | null,
+        frames: null as StillFrames | null              // for the quick DoF pass it carries
     });
     const live = useRef({ lens, focus, accumulate, depthRange, busy, sceneKey, finish, shape });
     live.current = { lens, focus, accumulate, depthRange, busy, sceneKey, finish, shape };
@@ -137,6 +133,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         const camera = cc.entity.camera!;
         const sf = new StillFrames(app);
         still.current = sf;
+        state.current.frames = sf;
 
         // CameraFrame composes into the camera's render target; it reads the
         // target when it builds its passes, so it is rebuilt once here
@@ -180,6 +177,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
             cf.enabled = true;
             sf.destroy();
             still.current = null;
+            state.current.frames = null;
             app.autoRender = true;
         };
     }, [app, controls, frame]);

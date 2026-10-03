@@ -61,6 +61,7 @@ import { APERTURE_GROUP } from './aperture';
 import { FOCUS_RATIO_MIN, frameRect, frameShape, type FrameTint, type Grain, type Halation, type Viewport } from '../scene/experience';
 import { resolveFilm, type FilmSettings } from '../scene/films';
 import { composeReadsScene, type CameraFramePass } from './engine';
+import { ASTIGMATISM, CATS_EYE_SHIFT, LensDofPass } from './lensDof';
 import {
     ADDRESS_CLAMP_TO_EDGE, BLENDEQUATION_ADD, BLENDMODE_ONE, BlendState, FILTER_LINEAR, FILTER_NEAREST,
     FramePass, PIXELFORMAT_RG32F, PIXELFORMAT_RGB10A2, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
@@ -69,10 +70,6 @@ import {
 
 // One aperture sample from the scene texture (linear HDR), weighted by the
 // cat's eye mask, into the sum.
-// Astigmatism at full strength: in the frame corner the radial focus moves
-// this far one way and the tangential focus as far the other, in units of
-// the focus ratio (1 / distance relative to the set focus).
-const ASTIGMATISM = 0.6;
 
 const accumulateGLSL = /* glsl */ `
     #define ASTIGMATISM ${ASTIGMATISM.toFixed(3)}
@@ -615,9 +612,6 @@ const GRAIN_RATE = 24;
 // them in the corner (intensity / 1024 · 0.5², either way).
 const FRINGING_SCALE = 1 / 2048;
 
-// cat's eye at full strength: the barrel disc is shifted by this many
-// aperture radii at the image corner (the overlap there is about 40 %)
-const CATS_EYE_SHIFT = 1;
 
 // the grain pattern for now: changes GRAIN_RATE × animation times a second
 const grainSeed = (g: Grain) =>
@@ -673,6 +667,9 @@ export class StillFrames {
     private rangeOptions: { far: number; reciprocal: boolean } | null = null;
     private depthTarget: RenderTarget | null = null;   // writes into the scene depth texture
     private pass: AccumulatePass;
+    /** The quick lens DoF, right after this pass (lensDof.ts). */
+    readonly dof: LensDofPass;
+    private rpc: CameraFramePass | null = null;   // the camera frame pass we are hooked into
     private accumulateShader: Shader;
     private averageShader: Shader;
     private rangeShader: Shader;
@@ -724,6 +721,7 @@ export class StillFrames {
         // two channels: depth and coverage
         this.geo = target(device, 'StillGeometry', PIXELFORMAT_RG32F, false);
         this.pass = new AccumulatePass(device, this);
+        this.dof = new LensDofPass(device);
         this.accumulateShader = quadShader(device, 'StillAccumulate', accumulateGLSL);
         this.averageShader = quadShader(device, 'StillAverage', averageGLSL);
         this.rangeShader = quadShader(device, 'StillRange', rangeGLSL);
@@ -796,20 +794,35 @@ export class StillFrames {
         const tagged = rpc as CameraFramePass & { [HOOKED]?: StillFrames };
         if (tagged[HOOKED] === this) return;
         tagged[HOOKED] = this;
+        this.rpc = rpc;
         const original = rpc.frameUpdate.bind(rpc);
         rpc.frameUpdate = () => {
             original();
             if (tagged[HOOKED] !== this) return;
             const passes = rpc.beforePasses;
+            // passes of an earlier StillFrames on this camera (destroyed) must not run
+            for (let i = passes.length - 1; i >= 0; i--) {
+                const p = passes[i];
+                if ((p instanceof AccumulatePass || p instanceof LensDofPass) && p !== this.pass && p !== this.dof) passes.splice(i, 1);
+            }
             const at = passes.indexOf(this.pass);
             const after = passes.indexOf(rpc.scenePassTransparent ?? rpc.scenePass!);
             if (at !== after + 1) {
                 if (at >= 0) passes.splice(at, 1);
                 passes.splice(passes.indexOf(rpc.scenePassTransparent ?? rpc.scenePass!) + 1, 0, this.pass);
             }
+            // the quick DoF right after our pass
+            const dofAt = passes.indexOf(this.dof);
+            if (dofAt !== passes.indexOf(this.pass) + 1) {
+                if (dofAt >= 0) passes.splice(dofAt, 1);
+                passes.splice(passes.indexOf(this.pass) + 1, 0, this.dof);
+            }
             this.scene = rpc.rt?.colorBuffer ?? null;
             this.depth = rpc.sceneDepthTexture;
             this.pass.enabled = (this.active || this.capture || !!this.rangeOptions) && !!this.scene;
+            this.dof.source = this.active ? this.avg.colorBuffer : this.scene;
+            this.dof.depth = this.depth;
+            this.dof.enabled = this.dof.wanted && !!this.scene && !!this.depth;
             if (!this.pass.enabled || !this.active) return;
             const avg = this.avg.colorBuffer;
             if (rpc.composePass && composeReadsScene(rpc)) rpc.composePass.sceneTexture = avg;
@@ -1019,6 +1032,16 @@ export class StillFrames {
     destroy() {
         this.active = false;
         this.pass.enabled = false;
+        this.dof.enabled = false;
+        // out of the camera's pass list, so nothing runs them on freed buffers
+        const passes = this.rpc?.beforePasses;
+        if (passes) {
+            for (const p of [this.pass, this.dof]) {
+                const i = passes.indexOf(p);
+                if (i >= 0) passes.splice(i, 1);
+            }
+        }
+        this.dof.dispose();
         for (const rt of [this.frame, ...this.display, this.sum, this.avg, this.geo, ...this.ranges, ...this.halo]) {
             rt.destroyTextureBuffers();
             rt.destroy();
