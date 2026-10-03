@@ -83,7 +83,7 @@ function stillSample(lens: Lens, u: number, v: number, j: { x: number; y: number
         shift: [0.5 * p00 * j.x / j.focus, 0.5 * p11 * j.y / j.focus],
         // in units of the focus ratio: Δ(1/distance) · focus distance
         fringing: lens.bokehFringing * (FRINGING_MM / 1000) / (f * f) * (j.focus * lens.metersPerUnit),
-        field: [lens.fieldCurvature, lens.tiltX, lens.tiltY],
+        field: [lens.fieldCurvature, lens.tiltX, lens.tiltY, lens.astigmatism],
         frameUv: [r.w / (2 * width), r.h / (2 * height), w2 / (w2 + h2), h2 / (w2 + h2)]
     };
 }

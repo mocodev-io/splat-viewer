@@ -69,18 +69,40 @@ import {
 
 // One aperture sample from the scene texture (linear HDR), weighted by the
 // cat's eye mask, into the sum.
+// Astigmatism at full strength: in the frame corner the radial focus moves
+// this far one way and the tangential focus as far the other, in units of
+// the focus ratio (1 / distance relative to the set focus).
+const ASTIGMATISM = 0.6;
+
 const accumulateGLSL = /* glsl */ `
+    #define ASTIGMATISM ${ASTIGMATISM.toFixed(3)}
     varying vec2 uv0;
     uniform sampler2D still_scene;
     uniform vec4 still_lens;      // lens point (units of the f-stop radius), cat's eye shift at the corner, weight of this point
     uniform vec4 still_shift;     // uv shift per unit of focus ratio x, y; bokeh fringing (focus ratio between green and red / blue); -
-    uniform vec4 still_field;     // field curvature, tilt x, tilt y, -
+    uniform vec4 still_field;     // field curvature, tilt x, tilt y, astigmatism
     uniform vec4 still_frameUv;   // frame half size in uv x, y; sensor width² and height² over the diagonal²
 
     // the focus plane: how much nearer than in the centre, in 1 / distance (focusRatio in experience.ts)
     float ratioAt(vec2 q) {
         float r2 = q.x * q.x * still_frameUv.z + q.y * q.y * still_frameUv.w;
         return max(1.0 + still_field.x * r2 + still_field.y * q.x + still_field.z * q.y, ${FOCUS_RATIO_MIN.toFixed(3)});
+    }
+
+    // The shift for a focus ratio, with the radial and the tangential part
+    // of the lens offset focused apart by astigmatism (worked out in
+    // pixel-square space, as the uv shift is anisotropic).
+    vec2 shiftFor(float ratio, float astig) {
+        if (astig == 0.0) return still_shift.xy * (ratio - 1.0);
+        // canvas aspect: sensor aspect times the frame's share of height over width
+        float aspect = sqrt(still_frameUv.z / still_frameUv.w) * still_frameUv.y / still_frameUv.x;
+        vec2 toPx = vec2(aspect, 1.0);
+        vec2 dir = (uv0 - 0.5) * toPx;
+        vec2 er = dot(dir, dir) > 1e-12 ? normalize(dir) : vec2(1.0, 0.0);
+        vec2 et = vec2(-er.y, er.x);
+        vec2 sp = still_shift.xy * toPx;
+        vec2 shift = er * dot(sp, er) * (ratio - astig - 1.0) + et * dot(sp, et) * (ratio + astig - 1.0);
+        return shift / toPx;
     }
 
     void main() {
@@ -96,19 +118,25 @@ const accumulateGLSL = /* glsl */ `
         // A focus plane other than the flat one the sample was rendered
         // for: seen from this lens point, every point of the image moves by
         // the same amount whatever its depth, so the sample is read shifted.
+        // Astigmatism: away from the centre, the part of the lens offset
+        // along the radius and the part across it focus apart, growing with
+        // the square of the distance; the blur stretches along circles
+        // (swirl, > 0) or outwards from the centre (radial, < 0).
         // Bokeh fringing: each colour has its own focus. As in an achromat,
         // red and blue focus together and green apart: the blur in front of
         // the focus spreads red and blue wider (magenta fringes), behind it
         // green (green fringes), as fast lenses show wide open.
         float ratio = ratioAt(q);
+        float r2 = q.x * q.x * still_frameUv.z + q.y * q.y * still_frameUv.w;
+        float astig = still_field.w * ASTIGMATISM * r2;
         vec3 c;
         if (still_shift.z > 0.0) {
             vec3 rc = ratio + still_shift.z * vec3(-0.5, 0.5, -0.5);
-            c.r = texture2D(still_scene, uv0 - still_shift.xy * (rc.r - 1.0)).r;
-            c.g = texture2D(still_scene, uv0 - still_shift.xy * (rc.g - 1.0)).g;
-            c.b = texture2D(still_scene, uv0 - still_shift.xy * (rc.b - 1.0)).b;
+            c.r = texture2D(still_scene, uv0 - shiftFor(rc.r, astig)).r;
+            c.g = texture2D(still_scene, uv0 - shiftFor(rc.g, astig)).g;
+            c.b = texture2D(still_scene, uv0 - shiftFor(rc.b, astig)).b;
         } else {
-            c = texture2D(still_scene, uv0 - still_shift.xy * (ratio - 1.0)).rgb;
+            c = texture2D(still_scene, uv0 - shiftFor(ratio, astig)).rgb;
         }
         gl_FragColor = vec4(c * w, w);
     }
@@ -529,7 +557,7 @@ const haloBlurGLSL = /* glsl */ `
 export type StillSample = {
     x: number; y: number; catsEye: number; weight: number;
     shift: [number, number]; fringing: number;
-    field: [number, number, number];
+    field: [number, number, number, number];   // field curvature, tilt x, tilt y, astigmatism
     frameUv: [number, number, number, number];
 };
 
@@ -842,7 +870,7 @@ export class StillFrames {
             scope.resolve('still_scene').setValue(scene);
             scope.resolve('still_lens').setValue([sm.x, sm.y, sm.catsEye * CATS_EYE_SHIFT, sm.weight]);
             scope.resolve('still_shift').setValue([sm.shift[0], sm.shift[1], sm.fringing, 0]);
-            scope.resolve('still_field').setValue([...sm.field, 0]);
+            scope.resolve('still_field').setValue(sm.field);
             scope.resolve('still_frameUv').setValue(sm.frameUv);
             this.device.setBlendState(this.count === 0 ? BlendState.NOBLEND : ADD);
             drawQuadWithShader(this.device, this.sum, this.accumulateShader);

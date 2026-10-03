@@ -148,7 +148,7 @@ distance, no separate field of view.
     towards a circle (curved blades), **Rotation °** turns them;
   - **Anamorphic** (1–2) squeezes the shape into an upright oval, the look
     of an anamorphic lens;
-  - **Cat's eye** (0–1): towards the corners the lens barrel cuts part of
+  - **Cat's eye** (0–1.5): towards the corners the lens barrel cuts part of
     the aperture away (mechanical vignetting), so the bokeh there turns
     into ovals along the circle around the centre, the "swirl" of lenses
     like the Helios 44. It is exact per pixel; the corners get fewer
@@ -176,6 +176,13 @@ distance, no separate field of view.
     (Scheimpflug): nearer on one side, further on the other. Along a floor
     or a table it keeps much more sharp; tipped the other way it gives the
     miniature look.
+  - **Radial ↔ swirl** (−1..1): astigmatism. Away from the centre, light
+    passing the lens along the radius and across it comes to a focus at
+    different distances, more so towards the corners, so the blur stretches
+    in one direction: outwards from the centre (radial, −, the zoom-like
+    smear of old portrait and large-format lenses) or along circles around
+    it (swirl, +, as a Helios 44). The middle stays sharp. Still only; with
+    field curvature and cat's eye it builds the full vintage look.
   - The focus distance (and Focus m) is the one in the middle of the frame;
     autofocus sets it so that the AF point itself is sharp, and its label
     shows the distance there. The quick DoF while moving follows the same

@@ -147,6 +147,7 @@ export type Lens = {
     fieldCurvature: number;      // -1..1: towards the corners the focus comes nearer (> 0) or goes further (< 0)
     tiltX: number;               // -1..1: the focus plane tilted, nearer on one side, further on the other
     tiltY: number;
+    astigmatism: number;         // -1 blur stretched outwards from the centre (radial), 1 along circles around it (swirl)
     // the still (useStillDof.ts, stillFrames.ts)
     overblur: number;            // gather on the average, × the gap between lens points; 0 off
     stillFade: number;           // how much of the way to a new group of samples the screen goes per frame
@@ -164,12 +165,13 @@ export const lensRanges = {
     bladeRoundness: { min: 0, max: 1, step: 0.01 },
     bladeRotation: { min: 0, max: 180, step: 1 },
     anamorphic: { min: 1, max: 2, step: 0.01 },
-    catsEye: { min: 0, max: 1, step: 0.01 },
+    catsEye: { min: 0, max: 1.5, step: 0.01 },
     bokehFringing: { min: 0, max: 1, step: 0.01 },
     bokehCharacter: { min: -1, max: 1, step: 0.01 },
     fieldCurvature: { min: -1, max: 1, step: 0.01 },
     tiltX: { min: -1, max: 1, step: 0.01 },
     tiltY: { min: -1, max: 1, step: 0.01 },
+    astigmatism: { min: -1, max: 1, step: 0.01 },
     overblur: { min: 0, max: 2, step: 0.05 },
     stillFade: { min: 0.05, max: 1, step: 0.01 }
 } as const;
@@ -196,6 +198,7 @@ export const defaultLens = (): Lens => ({
     fieldCurvature: 0,
     tiltX: 0,
     tiltY: 0,
+    astigmatism: 0,
     overblur: 1.5,
     stillFade: 0.35,
     afFrame: true

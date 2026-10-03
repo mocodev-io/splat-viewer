@@ -178,7 +178,9 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
             'Focus plane': folder({
                 fieldCurvature: { value: d.fieldCurvature, ...r.fieldCurvature, label: 'Field curvature' },
                 tiltX: { value: d.tiltX, ...r.tiltX, label: 'Tilt ↔' },
-                tiltY: { value: d.tiltY, ...r.tiltY, label: 'Tilt ↕' }
+                tiltY: { value: d.tiltY, ...r.tiltY, label: 'Tilt ↕' },
+                // blur stretched outwards (radial, -) or along circles (swirl, +); still only
+                astigmatism: { value: d.astigmatism, ...r.astigmatism, label: 'Radial ↔ swirl' }
             }, { collapsed: true, render: dof })
         }, { order: ORDER.lens })
     }), [onAfCenter, onMeasure, onApplyScale]);
@@ -205,6 +207,7 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         fieldCurvature: v.fieldCurvature,
         tiltX: v.tiltX,
         tiltY: v.tiltY,
+        astigmatism: v.astigmatism,
         overblur: v.overblur,
         stillFade: v.stillFade,
         afFrame: v.afFrame
