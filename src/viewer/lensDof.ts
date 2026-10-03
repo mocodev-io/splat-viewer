@@ -18,10 +18,11 @@
 
 import type { AppBase, Texture } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import { frameRect, type FrameShape, type Lens } from '../scene/experience';
+import { FOCUS_RATIO_MIN, frameRect, type FrameShape, type Lens } from '../scene/experience';
 import { depthIsReciprocal, setShaderChunks } from './engine';
 
 const composeDofGLSL = /* glsl */ `
+    #define LENS_RATIO_MIN ${FOCUS_RATIO_MIN.toFixed(3)}
     #ifdef DOF
         // The depth debug view declares the depth map itself, further down in
         // the compose shader; that view replaces the image anyway, so the
@@ -45,6 +46,17 @@ const composeDofGLSL = /* glsl */ `
         uniform float lens_view;     // normalized depth view: 0 off, 1 linear, 2 inverse
         uniform vec4 lens_extra;     // grain (over-blur), blur amount view white (pixels), depth range ready, -
         uniform highp sampler2D lens_rangeMap;   // depth range of the image (stillFrames.ts): nearest, farthest
+        uniform vec4 lens_field;     // field curvature, tilt x, tilt y, -
+        uniform vec4 lens_frameUv;   // frame half size in uv x, y; sensor width² and height² over the diagonal²
+
+        // the focus distance at this pixel (scene units): the set one, moved
+        // by the focus plane's curvature and tilt (focusRatio in experience.ts)
+        float lensS;
+        float lensFocusAt(vec2 uv) {
+            vec2 q = (uv - 0.5) / lens_frameUv.xy;
+            float r2 = q.x * q.x * lens_frameUv.z + q.y * q.y * lens_frameUv.w;
+            return lens_params.x / max(1.0 + lens_field.x * r2 + lens_field.y * q.x + lens_field.z * q.y, LENS_RATIO_MIN);
+        }
 
         // The splat scene depth holds, per pixel, the coverage-weighted sum of
         // 1 / depth of the splats, plus the uncovered rest (1 - A) times the
@@ -66,7 +78,7 @@ const composeDofGLSL = /* glsl */ `
         }
 
         float lensCoc(float depth) {
-            return min(abs(1.0 - lens_params.x / max(depth, 1e-4)) * lens_params.y, lens_params.z);
+            return min(abs(1.0 - lensS / max(depth, 1e-4)) * lens_params.y, lens_params.z);
         }
 
         // The blur of this pixel itself, and whether it belongs to the front.
@@ -84,7 +96,7 @@ const composeDofGLSL = /* glsl */ `
         //   two surfaces and gets at least the smaller of their two blurs.
         vec2 lensCenterCoc(vec2 uv, float depth) {
             float size = lensCoc(depth);
-            float front = depth < lens_params.x ? 1.0 : 0.0;
+            float front = depth < lensS ? 1.0 : 0.0;
             float dMin = depth;
             float dMax = depth;
             for (int ring = 1; ring <= 3; ring++) {
@@ -98,12 +110,12 @@ const composeDofGLSL = /* glsl */ `
                         float s = lensCoc(d);
                         if (s > size) {
                             size = s;
-                            front = d < lens_params.x ? 1.0 : front;
+                            front = d < lensS ? 1.0 : front;
                         }
                     }
                 }
             }
-            if (dMin < lens_params.x && dMax > lens_params.x) {
+            if (dMin < lensS && dMax > lensS) {
                 size = max(size, min(lensCoc(dMin), lensCoc(dMax)));
             }
             return vec2(size, front);
@@ -131,6 +143,7 @@ const composeDofGLSL = /* glsl */ `
                 return base;
             }
             float maxR = lens_params.z;
+            lensS = lensFocusAt(uv);
             float centerDepth = lensDepth(uv);
             vec2 center = lensCenterCoc(uv, centerDepth);
             float centerSize = center.x;
@@ -343,4 +356,8 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, shape: 
     scope.resolve('lens_view').setValue(view);
     scope.resolve('lens_extra').setValue([still ? 1 : 0, BLUR_VIEW_WHITE * frame.h, range.ready ? 1 : 0, 0]);
     scope.resolve('lens_rangeMap').setValue(range.texture);
+    const w2 = lens.sensorWidth * lens.sensorWidth;
+    const h2 = lens.sensorHeight * lens.sensorHeight;
+    scope.resolve('lens_field').setValue([lens.fieldCurvature, lens.tiltX, lens.tiltY, 0]);
+    scope.resolve('lens_frameUv').setValue([frame.w / (2 * device.width), frame.h / (2 * device.height), w2 / (w2 + h2), h2 / (w2 + h2)]);
 }

@@ -167,7 +167,18 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
                 bladeRoundness: { value: d.bladeRoundness, ...r.bladeRoundness, label: 'Roundness', render: blades },
                 bladeRotation: { value: d.bladeRotation, ...r.bladeRotation, label: 'Rotation °', render: blades },
                 anamorphic: { value: d.anamorphic, ...r.anamorphic, label: 'Anamorphic' },
-                catsEye: { value: d.catsEye, ...r.catsEye, label: "Cat's eye" }
+                catsEye: { value: d.catsEye, ...r.catsEye, label: "Cat's eye" },
+                // colour fringes on the bokeh, and its brightness from the
+                // middle to the rim (still only)
+                bokehFringing: { value: d.bokehFringing, ...r.bokehFringing, label: 'Fringing' },
+                bokehCharacter: { value: d.bokehCharacter, ...r.bokehCharacter, label: 'Smooth ↔ bubble' }
+            }, { collapsed: true, render: dof }),
+            // where the sharp plane lies: bent (field curvature, with cat's
+            // eye the swirl of a Petzval or Helios) or tilted (tilt lens)
+            'Focus plane': folder({
+                fieldCurvature: { value: d.fieldCurvature, ...r.fieldCurvature, label: 'Field curvature' },
+                tiltX: { value: d.tiltX, ...r.tiltX, label: 'Tilt ↔' },
+                tiltY: { value: d.tiltY, ...r.tiltY, label: 'Tilt ↕' }
             }, { collapsed: true, render: dof })
         }, { order: ORDER.lens })
     }), [onAfCenter, onMeasure, onApplyScale]);
@@ -189,6 +200,11 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         bladeRotation: v.bladeRotation,
         anamorphic: v.anamorphic,
         catsEye: v.catsEye,
+        bokehFringing: v.bokehFringing,
+        bokehCharacter: v.bokehCharacter,
+        fieldCurvature: v.fieldCurvature,
+        tiltX: v.tiltX,
+        tiltY: v.tiltY,
         overblur: v.overblur,
         stillFade: v.stillFade,
         afFrame: v.afFrame

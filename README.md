@@ -153,8 +153,37 @@ distance, no separate field of view.
     into ovals along the circle around the centre, the "swirl" of lenses
     like the Helios 44. It is exact per pixel; the corners get fewer
     effective samples, so they are a little grainier at low quality.
+  - **Fringing** (0–1): longitudinal chromatic aberration, the colour
+    fringes of a fast lens wide open. Red and blue come to a focus apart
+    from green (at 1, 0.5 mm on the image side), so blur in front of the
+    focus gets magenta edges and blur behind it green ones; the shift is
+    fixed in 1 / distance (δ / f²), so it matters more for short lenses.
+  - **Smooth ↔ bubble** (−1..1): spherical aberration as the brightness of
+    the bokeh from its middle to its rim: −1 smooth discs that fade out
+    (apodization, as Sony's STF or Fuji's APD lenses), 1 bright rims with
+    a darker middle (the "soap bubble" of a Meyer Trioplan). The lens points
+    are weighted by their radius; over each group of eight the weights
+    average out, so the brightness stays the same.
 
-  The quick DoF while the camera moves stays round.
+  The quick DoF while the camera moves stays round, without fringing.
+- **Focus plane** (with DoF on): where the sharp plane lies.
+  - **Field curvature** (−1..1): the plane bends into a bowl, the focus
+    coming nearer towards the corners (further at negative values), in
+    sensor millimetres, so round. With cat's eye this gives the swirl of
+    a Petzval or a Helios 44: a sharp middle and blur that turns and runs
+    outwards. At 1 the corner focuses at half the distance.
+  - **Tilt ↔ / Tilt ↕** (−1..1): the plane tipped, as with a tilt lens
+    (Scheimpflug): nearer on one side, further on the other. Along a floor
+    or a table it keeps much more sharp; tipped the other way it gives the
+    miniature look.
+  - The focus distance (and Focus m) is the one in the middle of the frame;
+    autofocus sets it so that the AF point itself is sharp, and its label
+    shows the distance there. The quick DoF while moving follows the same
+    plane.
+  - In the still this is exact: seen from one lens point, moving the focus
+    by a ratio moves every point of the image by the same amount whatever
+    its depth, so each aperture sample is read shifted per pixel (per
+    colour for the fringing). No extra rendering.
 - When nothing changes the viewer stops rendering: once the last sample of
   a still is in (the last group eases in without rendering the scene
   again), or after a second without lens DoF. The HUD shows `idle`; any

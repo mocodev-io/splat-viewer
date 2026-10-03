@@ -4,7 +4,7 @@ import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { frameRect, type FrameShape, type Lens } from '../scene/experience';
-import { StillFrames, type Finish } from './stillFrames';
+import { StillFrames, type Finish, type StillSample } from './stillFrames';
 import { Aperture, APERTURE_GROUP } from './aperture';
 import { cameraFramePass, depthIsReciprocal, engineProblems, stillHooksOk } from './engine';
 
@@ -49,6 +49,44 @@ const DRIFT_PX = 0.5;
 // smoothly from the moving view to the exact one; in-focus parts have no blur
 // circle and stay sharp.
 const overblurFor = (lens: Lens, shown: number) => Math.min(lens.overblur / Math.sqrt(Math.max(shown, 1)), 1);
+
+// Bokeh fringing (longitudinal chromatic aberration): the colours come to a
+// focus at slightly different distances behind the lens. At full strength
+// green focuses 0.5 mm off red and blue on the image side, a fast lens wide
+// open made clearly visible; on the subject side that shifts 1 / distance by
+// δ / f² (less for longer lenses), the same at any focus distance.
+const FRINGING_MM = 0.5;
+
+// The aperture sample for StillFrames: the lens point and its weight, and
+// what the shifted focus plane needs. Seen from a lens point moved by j in
+// the lens plane, with the frustum sheared so the focus plane S stays put, a
+// point at depth d moves by P·j·(1/S − 1/d) in clip space; a focus nearer by
+// a ratio r (1/S' = r/S) adds P·j/S·(r − 1), the same at every depth. In uv
+// that is half of it.
+function stillSample(lens: Lens, u: number, v: number, j: { x: number; y: number; focus: number }, fov: number,
+    shape: FrameShape, app: AppBase): StillSample {
+    const { width, height } = app.graphicsDevice;
+    const r = frameRect(width, height, shape);
+    // the projection's x and y scale, as calculateProjection sets it up: the
+    // frame's horizontal angle `fov` widened over the canvas
+    const p00 = r.w / (width * Math.tan(fov * Math.PI / 360));
+    const p11 = p00 * width / Math.max(height, 1);
+    const w2 = lens.sensorWidth * lens.sensorWidth;
+    const h2 = lens.sensorHeight * lens.sensorHeight;
+    // bokeh character: lens points weighted by their radius; over the disc
+    // (and over each group of eight) 2ρ² − 1 averages to 0, so the
+    // brightness stays the same
+    const weight = Math.max(0, 1 + lens.bokehCharacter * (2 * (u * u + v * v) - 1));
+    const f = lens.focalLength / 1000;          // m
+    return {
+        x: u, y: v, catsEye: lens.catsEye, weight,
+        shift: [0.5 * p00 * j.x / j.focus, 0.5 * p11 * j.y / j.focus],
+        // in units of the focus ratio: Δ(1/distance) · focus distance
+        fringing: lens.bokehFringing * (FRINGING_MM / 1000) / (f * f) * (j.focus * lens.metersPerUnit),
+        field: [lens.fieldCurvature, lens.tiltX, lens.tiltY],
+        frameUv: [r.w / (2 * width), r.h / (2 * height), w2 / (w2 + h2), h2 / (w2 + h2)]
+    };
+}
 
 type Pose = { p: Vec3; r: Quat };
 const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
@@ -239,7 +277,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         const [u, v] = s.aperture.sample(sf.count);
         const radius = lens.focalLength / 1000 / lens.fStop / 2 / lens.metersPerUnit;   // f-stop radius, scene units
         s.jitter = { x: u * radius, y: v * radius, focus: focus.current / lens.metersPerUnit };
-        sf.prepare(engine, true, [u, v, lens.catsEye], false, range);
+        sf.prepare(engine, true, stillSample(lens, u, v, s.jitter, camera!.fov, live.current.shape, app), false, range);
         // the average composed this frame shows the whole groups among count + 1 samples
         const shown = (sf.count + 1) - (sf.count + 1) % APERTURE_GROUP;
         s.overblur = overblurFor(lens, shown);

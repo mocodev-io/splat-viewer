@@ -58,7 +58,7 @@
 // stops rendering, only this last step is repeated (`refresh`).
 
 import { APERTURE_GROUP } from './aperture';
-import { frameRect, frameShape, type FrameTint, type Grain, type Halation, type Viewport } from '../scene/experience';
+import { FOCUS_RATIO_MIN, frameRect, frameShape, type FrameTint, type Grain, type Halation, type Viewport } from '../scene/experience';
 import { resolveFilm, type FilmSettings } from '../scene/films';
 import { composeReadsScene, type CameraFramePass } from './engine';
 import {
@@ -72,17 +72,45 @@ import {
 const accumulateGLSL = /* glsl */ `
     varying vec2 uv0;
     uniform sampler2D still_scene;
-    uniform vec4 still_lens;      // lens point (units of the f-stop radius), cat's eye shift at the corner, aspect
+    uniform vec4 still_lens;      // lens point (units of the f-stop radius), cat's eye shift at the corner, weight of this point
+    uniform vec4 still_shift;     // uv shift per unit of focus ratio x, y; bokeh fringing (focus ratio between green and red / blue); -
+    uniform vec4 still_field;     // field curvature, tilt x, tilt y, -
+    uniform vec4 still_frameUv;   // frame half size in uv x, y; sensor width² and height² over the diagonal²
+
+    // the focus plane: how much nearer than in the centre, in 1 / distance (focusRatio in experience.ts)
+    float ratioAt(vec2 q) {
+        float r2 = q.x * q.x * still_frameUv.z + q.y * q.y * still_frameUv.w;
+        return max(1.0 + still_field.x * r2 + still_field.y * q.x + still_field.z * q.y, ${FOCUS_RATIO_MIN.toFixed(3)});
+    }
+
     void main() {
-        float w = 1.0;
+        vec2 q = (uv0 - 0.5) / still_frameUv.xy;          // -1..1 over the frame
+        float w = still_lens.w;
         if (still_lens.z > 0.0) {
-            // pixel position, 1 at the image corner
-            vec2 p = (uv0 * 2.0 - 1.0) * vec2(still_lens.w, 1.0) / length(vec2(still_lens.w, 1.0));
+            // pixel position, 1 at the frame corner
+            vec2 p = q * sqrt(still_frameUv.zw);
             float d = length(still_lens.xy + p * still_lens.z);
             // a soft edge, so neighbouring pixels do not switch samples in visible steps
-            w = 1.0 - smoothstep(0.92, 1.08, d);
+            w *= 1.0 - smoothstep(0.92, 1.08, d);
         }
-        gl_FragColor = vec4(texture2D(still_scene, uv0).rgb * w, w);
+        // A focus plane other than the flat one the sample was rendered
+        // for: seen from this lens point, every point of the image moves by
+        // the same amount whatever its depth, so the sample is read shifted.
+        // Bokeh fringing: each colour has its own focus. As in an achromat,
+        // red and blue focus together and green apart: the blur in front of
+        // the focus spreads red and blue wider (magenta fringes), behind it
+        // green (green fringes), as fast lenses show wide open.
+        float ratio = ratioAt(q);
+        vec3 c;
+        if (still_shift.z > 0.0) {
+            vec3 rc = ratio + still_shift.z * vec3(-0.5, 0.5, -0.5);
+            c.r = texture2D(still_scene, uv0 - still_shift.xy * (rc.r - 1.0)).r;
+            c.g = texture2D(still_scene, uv0 - still_shift.xy * (rc.g - 1.0)).g;
+            c.b = texture2D(still_scene, uv0 - still_shift.xy * (rc.b - 1.0)).b;
+        } else {
+            c = texture2D(still_scene, uv0 - still_shift.xy * (ratio - 1.0)).rgb;
+        }
+        gl_FragColor = vec4(c * w, w);
     }
 `;
 
@@ -490,6 +518,21 @@ const haloBlurGLSL = /* glsl */ `
     }
 `;
 
+/**
+ * One aperture sample for the still: the lens point (x, y, in units of the
+ * f-stop radius), cat's eye 0–1, its weight (bokeh character), the uv shift
+ * per unit of focus ratio for this lens point, the bokeh fringing (focus
+ * ratio between the colours), the focus plane (field curvature, tilt x, y)
+ * and the frame (half size in uv, sensor width² and height² over the
+ * diagonal²).
+ */
+export type StillSample = {
+    x: number; y: number; catsEye: number; weight: number;
+    shift: [number, number]; fringing: number;
+    field: [number, number, number];
+    frameUv: [number, number, number, number];
+};
+
 /** The vignette, as the finishing step draws it. */
 export type FinishVignette =
     | { mode: 'off' }
@@ -616,7 +659,7 @@ export class StillFrames {
     private device: GraphicsDevice;
     private scene: Texture | null = null;  // the scene texture of this frame
     private depth: Texture | null = null;  // the scene depth texture of this frame
-    private sample: [number, number, number] | null = null;
+    private sample: StillSample | null = null;
     private active = false;
     private capture = false;
     /** samples in `sum` */
@@ -708,7 +751,7 @@ export class StillFrames {
      * for a moving frame whether to keep its depth for a coming still, and
      * whether to follow the depth range for the normalized depth view.
      */
-    prepare(rpc: CameraFramePass | null, active: boolean, sample: [number, number, number] | null,
+    prepare(rpc: CameraFramePass | null, active: boolean, sample: StillSample | null,
         capture: boolean, range: { far: number; reciprocal: boolean } | null) {
         this.active = active;
         this.sample = active ? sample : null;
@@ -795,9 +838,12 @@ export class StillFrames {
         }
 
         if (this.sample) {
-            const [x, y, catsEye] = this.sample;
+            const sm = this.sample;
             scope.resolve('still_scene').setValue(scene);
-            scope.resolve('still_lens').setValue([x, y, catsEye * CATS_EYE_SHIFT, scene.width / Math.max(scene.height, 1)]);
+            scope.resolve('still_lens').setValue([sm.x, sm.y, sm.catsEye * CATS_EYE_SHIFT, sm.weight]);
+            scope.resolve('still_shift').setValue([sm.shift[0], sm.shift[1], sm.fringing, 0]);
+            scope.resolve('still_field').setValue([...sm.field, 0]);
+            scope.resolve('still_frameUv').setValue(sm.frameUv);
             this.device.setBlendState(this.count === 0 ? BlendState.NOBLEND : ADD);
             drawQuadWithShader(this.device, this.sum, this.accumulateShader);
             this.count++;

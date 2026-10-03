@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FILLMODE_FILL_WINDOW, RESOLUTION_AUTO, type BoundingBox } from 'playcanvas';
 import { Application } from '@playcanvas/react';
 import {
-    defaultExperience, frameShape, lensRanges, loadExperience, sceneLens, sceneLighting, sceneObjects, sceneViewport,
+    defaultExperience, focusRatio, frameShape, lensRanges, loadExperience, sceneLens, sceneLighting, sceneObjects, sceneViewport,
     settingsUrlFor, verticalFov,
     type CameraPose, type ExperienceSettings, type SceneObject, type Vec3Tuple
 } from './scene/experience';
@@ -308,6 +308,7 @@ export function App() {
                     active={!!loaded && lens.dof && lens.focusMode === 'auto'}
                     showFrame={lens.afFrame}
                     frameShape={frameShape(lens, lensPanel.viewport.frameStyle)}
+                    focusRatioAt={(qx, qy) => focusRatio(lens, qx, qy)}
                     point={afPoint}
                     transition={lens.afTransition}
                     metersPerUnit={lens.metersPerUnit}

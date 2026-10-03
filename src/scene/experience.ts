@@ -141,6 +141,12 @@ export type Lens = {
     bladeRotation: number;       // degrees
     anamorphic: number;          // horizontal squeeze, 1 spherical, 2 a 2x anamorphic
     catsEye: number;             // 0 none, 1 strong: bokeh turns to tangential ovals towards the corners
+    bokehFringing: number;       // 0 none, 1 strong: colour fringes on the bokeh (longitudinal chromatic aberration)
+    bokehCharacter: number;      // -1 smooth (apodized), 0 even, 1 bright rim (soap bubble)
+    // the focus plane (focusRatio)
+    fieldCurvature: number;      // -1..1: towards the corners the focus comes nearer (> 0) or goes further (< 0)
+    tiltX: number;               // -1..1: the focus plane tilted, nearer on one side, further on the other
+    tiltY: number;
     // the still (useStillDof.ts, stillFrames.ts)
     overblur: number;            // gather on the average, × the gap between lens points; 0 off
     stillFade: number;           // how much of the way to a new group of samples the screen goes per frame
@@ -159,6 +165,11 @@ export const lensRanges = {
     bladeRotation: { min: 0, max: 180, step: 1 },
     anamorphic: { min: 1, max: 2, step: 0.01 },
     catsEye: { min: 0, max: 1, step: 0.01 },
+    bokehFringing: { min: 0, max: 1, step: 0.01 },
+    bokehCharacter: { min: -1, max: 1, step: 0.01 },
+    fieldCurvature: { min: -1, max: 1, step: 0.01 },
+    tiltX: { min: -1, max: 1, step: 0.01 },
+    tiltY: { min: -1, max: 1, step: 0.01 },
     overblur: { min: 0, max: 2, step: 0.05 },
     stillFade: { min: 0.05, max: 1, step: 0.01 }
 } as const;
@@ -180,6 +191,11 @@ export const defaultLens = (): Lens => ({
     bladeRotation: 0,
     anamorphic: 1,
     catsEye: 0,
+    bokehFringing: 0,
+    bokehCharacter: 0,
+    fieldCurvature: 0,
+    tiltX: 0,
+    tiltY: 0,
     overblur: 1.5,
     stillFade: 0.35,
     afFrame: true
@@ -224,6 +240,25 @@ export function frameRect(width: number, height: number, shape: FrameShape) {
     const h = w / shape.aspect;
     return { x: (width - w) / 2, y: (height - h) / 2, w, h };
 }
+
+/**
+ * The focus plane, as how much nearer the focus is at a point of the frame
+ * than in its centre, in 1 / distance: the focus distance there is
+ * focus / ratio. `q` runs -1..1 over the frame (x right, y up). Field
+ * curvature bends it with the square of the distance from the centre (1 in
+ * the corner, measured in sensor millimetres, so round); tilt tips it, as a
+ * tilt lens (Scheimpflug) does: 1 / distance linear across the image. 1 at
+ * the centre.
+ */
+export function focusRatio(l: Pick<Lens, 'fieldCurvature' | 'tiltX' | 'tiltY' | 'sensorWidth' | 'sensorHeight'>, qx: number, qy: number) {
+    const w2 = l.sensorWidth * l.sensorWidth;
+    const h2 = l.sensorHeight * l.sensorHeight;
+    const r2 = (qx * qx * w2 + qy * qy * h2) / (w2 + h2);
+    return Math.max(1 + l.fieldCurvature * r2 + l.tiltX * qx + l.tiltY * qy, FOCUS_RATIO_MIN);
+}
+
+/** The focus ratio never goes below this: focus no further than this many times the set distance. */
+export const FOCUS_RATIO_MIN = 0.05;
 
 /** Horizontal angle of view of the frame, degrees. */
 export const horizontalFov = (l: Lens) => toDeg(2 * Math.atan(l.sensorWidth / (2 * l.focalLength)));

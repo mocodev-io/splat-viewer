@@ -9,6 +9,7 @@ type AutoFocusProps = {
     showFrame: boolean;                  // draw the AF point (focusing goes on without it)
     point: { x: number; y: number };     // AF point, 0..1 over the window; kept inside the frame
     frameShape: FrameShape;              // where the image lies in the window
+    focusRatioAt: (qx: number, qy: number) => number;   // the focus plane (focusRatio), q -1..1 over the frame
     transition: number;                  // s to (nearly) reach a new distance
     metersPerUnit: number;
     trigger: string;                     // a change forces a new measurement (another splat, say)
@@ -20,7 +21,7 @@ type AutoFocusProps = {
 // under the AF point only when something changed (camera, AF point, scene),
 // at most four times a second, and moves the focus towards each measurement
 // over `transition` seconds, like a lens motor.
-export function AutoFocus({ active, showFrame, point, frameShape, transition, metersPerUnit, trigger, api, focus }: AutoFocusProps) {
+export function AutoFocus({ active, showFrame, point, frameShape, focusRatioAt, transition, metersPerUnit, trigger, api, focus }: AutoFocusProps) {
     const target = useRef<number | null>(null);
     const last = useRef({ key: '', time: -Infinity, busy: false });
     const label = useRef<HTMLSpanElement>(null);
@@ -31,7 +32,9 @@ export function AutoFocus({ active, showFrame, point, frameShape, transition, me
         const r = frameRect(window.innerWidth, window.innerHeight, frameShape);
         const x = Math.min(Math.max(point.x * window.innerWidth, r.x), r.x + r.w);
         const y = Math.min(Math.max(point.y * window.innerHeight, r.y), r.y + r.h);
-        return { x, y };
+        // where in the frame, -1..1 with y up, for a curved or tilted focus plane
+        const q = { x: (x - r.x - r.w / 2) / (r.w / 2), y: -(y - r.y - r.h / 2) / (r.h / 2) };
+        return { x, y, ratio: focusRatioAt(q.x, q.y) };
     };
 
     useAppEvent('update', (dt: number) => {
@@ -55,7 +58,9 @@ export function AutoFocus({ active, showFrame, point, frameShape, transition, me
                 l.busy = false;
                 if (!p || !api.current) return;    // empty sky: keep the last focus
                 const r = lensRanges.focusDistance;
-                target.current = Math.min(Math.max(api.current.viewDepth(p) * metersPerUnit, r.min), r.max);
+                // the focus is set for the centre of the frame; with a curved
+                // or tilted focus plane the AF point lies `ratio` nearer
+                target.current = Math.min(Math.max(api.current.viewDepth(p) * metersPerUnit * at.ratio, r.min), r.max);
             });
         }
 
@@ -69,7 +74,8 @@ export function AutoFocus({ active, showFrame, point, frameShape, transition, me
             const inv = 1 / focus.current + (1 / target.current - 1 / focus.current) * k;
             focus.current = 1 / inv;
         }
-        if (label.current) label.current.textContent = `${focus.current.toFixed(2)} m`;
+        // the distance in focus at the AF point
+        if (label.current) label.current.textContent = `${(focus.current / at.ratio).toFixed(2)} m`;
         // follows the frame when the window or the sensor changes
         if (box.current) {
             box.current.style.left = `${at.x}px`;
