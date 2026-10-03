@@ -27,6 +27,9 @@
 //    of the pixel their blur covers. So a blurred foreground spreads over
 //    the background with its own soft edge, and the blur can be as large as
 //    the still's without the sharp outline of a foreground showing through.
+//    Inside that outline the foreground turns see-through as well: what
+//    shows through is the background just beside it, also when that is
+//    sharp (its own blur reaches nowhere).
 // 3. Blend (compose, full resolution): sharp where the pixel's own blur is
 //    under a pixel, the half-size result where it is more or where a nearer
 //    blur covers it; edges of sharp objects stay crisp.
@@ -237,9 +240,15 @@ const gatherGLSL = /* glsl */ `
                 cover *= w * area / (sa.x * sa.y);
                 nearSum += s.rgb * cover;
                 nearCover += cover;
+            } else if (c0 < -NEAR) {
+                // This pixel is foreground: what shows through its blurred
+                // edge is the background just beside it, sharp or not, so
+                // every background sample counts, the nearest by far the most.
+                float m = w * exp(-6.0 * length(o) / max(axes.x, axes.y));
+                bgSum += s.rgb * m;
+                bgTotal += vec3(m);
             } else {
-                float limit = c0 >= -NEAR ? max(bgOwn * 2.0, 0.5) : 1e4;
-                float cb = min(max(cs, 0.0), limit);
+                float cb = min(max(cs, 0.0), max(bgOwn * 2.0, 0.5));
                 vec3 m = w * vec3(
                     reaches(o, er, cb + fringe.r, astig),
                     reaches(o, er, cb + fringe.g, astig),
@@ -248,8 +257,8 @@ const gatherGLSL = /* glsl */ `
                 bgTotal += m;
             }
         }
-        // the background where nothing reached: this pixel, or for a
-        // foreground pixel whatever background was found around it
+        // the background where nothing reached (or, for a foreground pixel,
+        // none lies within its blur): this pixel
         vec3 bg = bgTotal.g > 1e-3 ? bgSum / max(bgTotal, vec3(1e-4)) : center.rgb;
         vec3 cover = clamp(nearCover, 0.0, 1.0);
         vec3 nearColor = nearSum / max(nearCover, vec3(1e-4));

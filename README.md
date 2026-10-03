@@ -144,8 +144,9 @@ distance, no separate field of view.
   - Two layers: everything blurred in front of the focus, the pixel's own
     surface included, laid over the rest by how much of the pixel its blur
     covers, so a blurred foreground turns see-through at its edge on both
-    sides; the rest gathered where its blur reaches, held back behind a
-    sharper pixel so there are no halos.
+    sides (inside its outline the background just beside it shows through,
+    also when that background is sharp); the rest gathered where its blur
+    reaches, held back behind a sharper pixel so there are no halos.
   - The blur reaches up to 8 % of the frame height, as far as the still's.
     Sharp parts stay at full resolution.
   - Prefiltered: the half-size image has mipmaps, and each sample reads
