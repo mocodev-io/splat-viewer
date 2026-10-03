@@ -148,9 +148,14 @@ distance, no separate field of view.
     sharper pixel so there are no halos.
   - The blur reaches up to 8 % of the frame height, as far as the still's.
     Sharp parts stay at full resolution.
-  - The same pass gives the shrinking over-blur on a still, with its
-    pattern turned per pixel (interleaved gradient noise), so few samples
-    show as fine grain rather than stepped lines.
+  - Prefiltered: the half-size image has mipmaps, and each sample reads
+    the level that matches the spacing of the samples, so a large blur is
+    smooth instead of made of copies; the lens points are turned per pixel
+    (interleaved gradient noise), so what error is left is fine grain, not
+    crosses or rings that move when the focus changes. Measured against
+    the still, a bokeh disc's area and light are within 5 %, so the still
+    only takes the noise away.
+  - The same pass gives the shrinking over-blur on a still.
   - Still better in the still: what lies exactly behind a blurred edge,
     and very large blur right next to a sharp edge (the half resolution
     can leave a thin seam there).

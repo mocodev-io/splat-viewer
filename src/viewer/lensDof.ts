@@ -39,7 +39,7 @@
 // and astigmatism moves the ratio by ∓a along and across the radius.
 
 import {
-    ADDRESS_CLAMP_TO_EDGE, BlendState, FILTER_LINEAR, FramePass, PIXELFORMAT_RGBA16F, RenderTarget,
+    ADDRESS_CLAMP_TO_EDGE, BlendState, FILTER_LINEAR, FILTER_LINEAR_MIPMAP_LINEAR, FramePass, PIXELFORMAT_RGBA16F, RenderTarget,
     SEMANTIC_POSITION, ShaderUtils, Texture, drawQuadWithShader, type AppBase, type GraphicsDevice, type Shader
 } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
@@ -141,7 +141,7 @@ const gatherGLSL = /* glsl */ `
     uniform sampler2D dof_prep;
     uniform vec4 dof_kernel[${KERNEL}];    // lens point x, y (f-stop radius units, shaped), weight (bubble), -
     uniform vec4 dof_size;       // half-size texel x, y, c∞ in half-size pixels, max radius (half-size pixels)
-    uniform vec4 dof_lens;       // cat's eye shift, fringing (focus ratio), turn the pattern per pixel (1), -
+    uniform vec4 dof_lens;       // cat's eye shift, fringing (focus ratio), -, -
     ${commonGLSL('dof_prep', 'dof_prep')}
 
     // how far a point with blur coc (signed) at offset o reaches this pixel,
@@ -168,10 +168,11 @@ const gatherGLSL = /* glsl */ `
         vec2 er = dot(dir, dir) > 1e-6 ? normalize(dir) : vec2(1.0, 0.0);
         vec2 et = vec2(-er.y, er.x);
 
-        // turned per pixel for the over-blur on a still (fine grain instead of copies)
-        float turn = dof_lens.z > 0.5
-            ? 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))
-            : 0.0;
+        // The lens points turned per pixel (interleaved gradient noise): with
+        // few samples over a large blur, a pattern shared by all pixels shows
+        // as copies, crosses and rings that move as the focus changes; turned
+        // per pixel the same error is fine grain.
+        float turn = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
         mat2 rot = mat2(cos(turn), sin(turn), -sin(turn), cos(turn));
 
         // How far to look: this pixel's own blur along and across the
@@ -192,6 +193,12 @@ const gatherGLSL = /* glsl */ `
             gl_FragColor = vec4(center.rgb, 0.0);
             return;
         }
+
+        // Prefiltered: each sample reads the half-size image at the detail
+        // level that matches the spacing of the samples, so a large blur is
+        // smooth rather than made of copies (mipmaps of the prepared image).
+        float spacing = max(axes.x, axes.y) * sqrt(3.14159 / float(${KERNEL}));
+        float lod = clamp(log2(max(spacing / 1.5, 1.0)), 0.0, 5.0);
 
         // cat's eye: pixel position, 1 at the frame corner
         vec2 p = q * sqrt(lens_frameUv.zw);
@@ -215,11 +222,11 @@ const gatherGLSL = /* glsl */ `
         for (int i = 0; i < ${KERNEL}; i++) {
             vec4 k = dof_kernel[i];
             float w = k.z;
-            if (dof_lens.x > 0.0) w *= 1.0 - smoothstep(0.92, 1.08, length(k.xy + p * dof_lens.x));
-            if (w <= 0.0) continue;
             vec2 kp = rot * k.xy;
+            if (dof_lens.x > 0.0) w *= 1.0 - smoothstep(0.92, 1.08, length(kp + p * dof_lens.x));
+            if (w <= 0.0) continue;
             vec2 o = side * (er * dot(kp, er) * axes.x + et * dot(kp, et) * axes.y);
-            vec4 s = texture2DLod(dof_prep, uv0 + o * texel, 0.0);
+            vec4 s = texture2DLod(dof_prep, uv0 + o * texel, lod);
             float cs = s.a;
             if (cs < -NEAR) {
                 vec3 cover = vec3(
@@ -383,10 +390,12 @@ export function installLensDof(app: AppBase) {
 /** Normalized depth view: 0 off, 1 linear, 2 inverse. */
 export type DepthView = 0 | 1 | 2;
 
-function halfTarget(device: GraphicsDevice, name: string) {
+// mipmapped: the engine makes the levels after each render into it
+function halfTarget(device: GraphicsDevice, name: string, mipmaps: boolean) {
     const colorBuffer = new Texture(device, {
         name, width: Math.max(1, device.width >> 1), height: Math.max(1, device.height >> 1),
-        format: PIXELFORMAT_RGBA16F, mipmaps: false, minFilter: FILTER_LINEAR, magFilter: FILTER_LINEAR,
+        format: PIXELFORMAT_RGBA16F, mipmaps,
+        minFilter: mipmaps ? FILTER_LINEAR_MIPMAP_LINEAR : FILTER_LINEAR, magFilter: FILTER_LINEAR,
         addressU: ADDRESS_CLAMP_TO_EDGE, addressV: ADDRESS_CLAMP_TO_EDGE
     });
     return new RenderTarget({ name, colorBuffer, depth: false });
@@ -423,8 +432,8 @@ export class LensDofPass extends FramePass {
     constructor(device: GraphicsDevice) {
         super(device);
         this.name = 'LensDof';
-        this.prep = halfTarget(device, 'LensDofPrep');
-        this.gather = halfTarget(device, 'LensDofGather');
+        this.prep = halfTarget(device, 'LensDofPrep', true);
+        this.gather = halfTarget(device, 'LensDofGather', false);
         this.prepShader = quadShader(device, 'LensDofPrep', prepGLSL);
         this.gatherShader = quadShader(device, 'LensDofGather', gatherGLSL);
     }
