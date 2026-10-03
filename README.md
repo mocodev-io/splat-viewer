@@ -184,7 +184,7 @@ lens optics work the same way).
   SuperSplat's grading, applied to the light before the film or the tone
   mapping.
 - **Detail**: **Sharpening**, **High precision** (scene rendering format).
-- **Effects**: the film **Grain** (below).
+- **Effects**: **Halation** and the film **Grain** (below).
 - **Lens → Optics**, what the lens and a filter in front of it add:
   **Chromatic aberration**, the **Vignette** and **Diffusion** (below).
 
@@ -244,8 +244,17 @@ the camera moves, while a still builds up and once it is done.
   - The profiles approximate the published character of each stock
     (datasheet curves and spectral sensitivity, and how they look in
     practice); they are not measured lab profiles.
-  - Choosing a film in the panel sets the grain to that film's own; you can
-    change it after. A loaded file keeps its own grain.
+  - Choosing a film in the panel sets the grain and halation to that
+    film's own; you can change them after. A loaded file keeps its own.
+- **Halation** (Effects): light that went through the emulsion, reflected
+  off the film base and exposed the red layer again: a red-orange glow
+  around strong highlights only, nothing around midtones. The light above
+  white is taken at a quarter of the image size, blurred over **Halation
+  radius** and added to the light before the film. Strong on cinema film
+  without an anti-halation layer (Vision3 500T), faint on most still film
+  and on black and white; choosing a film sets its own amount, which you
+  can change after. Works without a film too. Saved as
+  `extras.look.halation` (`amount`, `radius`).
 - **Grain** (Effects): random grains, strongest in the mid-tones as on
   film. Amount, **Size** (pixels; even large grain stays irregular, never
   blocky), **Color** (0 monochrome, 1 a separate grain per colour channel,
@@ -267,6 +276,7 @@ and neutral black and white):
     "filmFilter": "none",
     "filmStrength": 1,
     "grain": { "enabled": true, "intensity": 0.25, "size": 1, "color": 0.3, "animation": 1 },
+    "halation": { "amount": 0.15, "radius": 1 },
     "vignette": { "physical": false, "roundness": 1 }
   },
   "viewport": { "passepartout": 1, "frameStyle": "120", "frameTint": "auto" }

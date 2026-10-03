@@ -6,7 +6,7 @@ import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import {
-    frameShape, horizontalFov, ranges, type CameraPose, type Viewport, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    frameShape, horizontalFov, ranges, type CameraPose, type Halation, type Viewport, type Grain, type Lens, type LensVignette, type PostEffectSettings,
     type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
@@ -59,6 +59,7 @@ type ViewerCameraProps = {
     highPrecision: boolean;
     postEffects: PostEffectSettings;
     grain: Grain;
+    halation: Halation;
     film: FilmSettings;
     lensVignette: LensVignette;
     viewport: Viewport;
@@ -71,7 +72,7 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, film, lensVignette, viewport, background, sceneKey, busy, progress }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, halation, film, lensVignette, viewport, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
     const shape = frameShape(lens, viewport.frameStyle);
     // the film works on the image only; debug views show the engine's own output
@@ -187,6 +188,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     const finishKey = JSON.stringify({
         fringing: fringingAmount(postEffects),
         grain,
+        halation,
         film: filmOn ? film : { ...film, id: 'none' },
         vignette: vignetteFor(postEffects, lensVignette, lens),
         sensor: [lens.sensorWidth, lens.sensorHeight],

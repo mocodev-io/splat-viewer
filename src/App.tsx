@@ -207,6 +207,7 @@ export function App() {
                 look: {
                     ...lookExtras(experience),
                     grain: look.grain,
+                    halation: look.halation,
                     film: look.film.id,
                     filmFilter: look.film.filter,
                     filmStrength: look.film.strength,
@@ -277,6 +278,7 @@ export function App() {
                     highPrecision={look.highPrecision}
                     postEffects={look.postEffects}
                     grain={look.grain}
+                    halation={look.halation}
                     film={look.film}
                     lensVignette={look.lensVignette}
                     viewport={lensPanel.viewport}

@@ -58,7 +58,7 @@
 // stops rendering, only this last step is repeated (`refresh`).
 
 import { APERTURE_GROUP } from './aperture';
-import { frameRect, frameShape, type FrameTint, type Grain, type Viewport } from '../scene/experience';
+import { frameRect, frameShape, type FrameTint, type Grain, type Halation, type Viewport } from '../scene/experience';
 import { resolveFilm, type FilmSettings } from '../scene/films';
 import { composeReadsScene, type CameraFramePass } from './engine';
 import {
@@ -237,6 +237,8 @@ const finishGLSL = /* glsl */ `
     uniform vec4 frame_style;     // style (0 plain, 1 120, 2 35 mm), film edge x, y (pixels), roughness (pixels)
     uniform vec3 frame_base;      // film base colour
     uniform vec3 frame_mark;      // edge print colour
+    uniform float still_halation; // halation amount (0 off)
+    uniform sampler2D still_haloMap;   // the light above white, blurred
 
     float hash1(float n) { return fract(sin(n * 127.1) * 43758.5453); }
     float noise1(float x) {
@@ -322,13 +324,17 @@ const finishGLSL = /* glsl */ `
         // the lens: vignette as light lost; then the film
         float mode = still_vignette.x;
         bool film = still_film.x > 0.5;
-        if (mode > 0.5 || film || still_veil > 0.0) {
+        if (mode > 0.5 || film || still_veil > 0.0 || still_halation > 0.0) {
             // film: the image arrives as scene-linear light, log encoded
             // (lensDof.ts); without film, tone mapped and gamma encoded
             vec3 lin = film ? exp2(c * 16.0 - 12.0) * step(vec3(1.0 / 1024.0), c) : pow(max(c, vec3(0.0)), vec3(2.2));
             // a diffusion filter scatters a little of all the light over the
             // whole image: the darkest parts lift, as with a Pro-Mist
             lin += still_veil;
+            // halation: the light that came back from the film base, mostly red
+            if (still_halation > 0.0) {
+                lin += texture2D(still_haloMap, uv0).r * vec3(1.0, 0.35, 0.08) * still_halation * 1.5;
+            }
             if (mode > 1.5) {
                 float t = length(mm) / still_optics.z;           // tan of the angle to this point
                 float cos2 = 1.0 / (1.0 + t * t);
@@ -444,6 +450,46 @@ const finishGLSL = /* glsl */ `
     }
 `;
 
+// Halation: bright light goes through the emulsion, reflects off the film
+// base and exposes the red layer (some green) again in a ring around it: a
+// red-orange glow around strong highlights only. The light above white is
+// taken from the image at a quarter of its size (scene-linear with a film,
+// tone mapped without), blurred, and added to the light before the film.
+const haloThresholdGLSL = /* glsl */ `
+    varying vec2 uv0;
+    uniform sampler2D halo_source;
+    uniform vec4 halo_params;     // log encoded (1, a film) or gamma (0), texel size x, y, -
+    vec3 lin(vec2 uv) {
+        vec3 c = texture2D(halo_source, uv).rgb;
+        return halo_params.x > 0.5 ? exp2(c * 16.0 - 12.0) * step(vec3(1.0 / 1024.0), c) : pow(max(c, vec3(0.0)), vec3(2.2));
+    }
+    void main() {
+        vec2 t = halo_params.yz;
+        vec3 c = (lin(uv0 + vec2(-t.x, -t.y)) + lin(uv0 + vec2(t.x, -t.y)) + lin(uv0 + vec2(-t.x, t.y)) + lin(uv0 + t)) * 0.25;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        // only what is above white: scene white with a film, near the top without
+        float knee = halo_params.x > 0.5 ? smoothstep(0.6, 1.6, l) : smoothstep(0.55, 0.95, l);
+        gl_FragColor = vec4(vec3(l * knee), 1.0);
+    }
+`;
+
+// a Gaussian blur along one direction, 15 taps
+const haloBlurGLSL = /* glsl */ `
+    varying vec2 uv0;
+    uniform sampler2D halo_source;
+    uniform vec4 halo_blur;       // step x, y (uv), sigma (taps), -
+    void main() {
+        vec3 sum = vec3(0.0);
+        float total = 0.0;
+        for (int i = -7; i <= 7; i++) {
+            float w = exp(-float(i * i) / (2.0 * halo_blur.z * halo_blur.z));
+            sum += texture2D(halo_source, uv0 + halo_blur.xy * float(i)).rgb * w;
+            total += w;
+        }
+        gl_FragColor = vec4(sum / total, 1.0);
+    }
+`;
+
 /** The vignette, as the finishing step draws it. */
 export type FinishVignette =
     | { mode: 'off' }
@@ -454,6 +500,7 @@ export type FinishVignette =
 export type Finish = {
     fringing: number;            // SuperSplat's fringing intensity, 0 off
     grain: Grain;
+    halation: Halation;
     film: FilmSettings;              // off ('none') also while a debug view is shown
     vignette: FinishVignette;
     sensor: [number, number];    // mm; gives the frame its aspect and the vignette its geometry
@@ -562,6 +609,10 @@ export class StillFrames {
     private restoreShader: Shader;
     private presentShader: Shader;
     private finishShader: Shader;
+    private haloThresholdShader: Shader;
+    private haloBlurShader: Shader;
+    private halo: [RenderTarget, RenderTarget];   // halation at a quarter size: the light above white, blurred
+    private haloKey = '';                  // what the halation was made from
     private device: GraphicsDevice;
     private scene: Texture | null = null;  // the scene texture of this frame
     private depth: Texture | null = null;  // the scene depth texture of this frame
@@ -618,6 +669,17 @@ export class StillFrames {
         this.restoreShader = quadShader(device, 'StillRestore', restoreGLSL);
         this.presentShader = quadShader(device, 'StillPresent', presentGLSL);
         this.finishShader = quadShader(device, 'StillFinish', finishGLSL);
+        this.haloThresholdShader = quadShader(device, 'StillHaloThreshold', haloThresholdGLSL);
+        this.haloBlurShader = quadShader(device, 'StillHaloBlur', haloBlurGLSL);
+        const quarter = (name: string) => {
+            const colorBuffer = new Texture(device, {
+                name, width: Math.max(1, device.width >> 2), height: Math.max(1, device.height >> 2),
+                format: PIXELFORMAT_RGBA16F, mipmaps: false, minFilter: FILTER_LINEAR, magFilter: FILTER_LINEAR,
+                addressU: ADDRESS_CLAMP_TO_EDGE, addressV: ADDRESS_CLAMP_TO_EDGE
+            });
+            return new RenderTarget({ name, colorBuffer, depth: false });
+        };
+        this.halo = [quarter('StillHaloA'), quarter('StillHaloB')];
     }
 
     /** Follows the canvas size; returns true when it changed (the still starts over). */
@@ -625,6 +687,8 @@ export class StillFrames {
         const { width, height } = this.device;
         if (this.frame.width === width && this.frame.height === height) return false;
         for (const rt of [this.frame, ...this.display]) rt.resize(width, height);
+        for (const rt of this.halo) rt.resize(Math.max(1, width >> 2), Math.max(1, height >> 2));
+        this.haloKey = '';
         this.count = 0;
         return true;
     }
@@ -782,10 +846,31 @@ export class StillFrames {
         const g = finish.grain;
         if (!this.shownSource || !g.enabled || g.intensity <= 0 || g.animation <= 0) return;
         if (grainSeed(g) === this.seed) return;
-        this.finish(this.shownSource, finish);
+        this.finish(this.shownSource, finish, false);
     }
 
-    private finish(source: RenderTarget, finish: Finish) {
+    // The halation of an image: its light above white, at a quarter size,
+    // blurred over `radius` (× 1.2 % of the frame height).
+    private makeHalo(source: RenderTarget, logEncoded: boolean, radius: number, frameHeight: number) {
+        const scope = this.device.scope;
+        const [a, b] = this.halo;
+        this.device.setBlendState(BlendState.NOBLEND);
+        scope.resolve('halo_source').setValue(source.colorBuffer);
+        scope.resolve('halo_params').setValue([logEncoded ? 1 : 0, 1 / source.width, 1 / source.height, 0]);
+        drawQuadWithShader(this.device, a, this.haloThresholdShader);
+        // sigma in quarter-size pixels; the 15 taps are spread to cover 3 sigma
+        const sigma = Math.max(radius * 0.012 * frameHeight / 4, 0.5);
+        const stepPx = Math.max(sigma * 3 / 7, 1);
+        const tapSigma = sigma / stepPx;
+        scope.resolve('halo_source').setValue(a.colorBuffer);
+        scope.resolve('halo_blur').setValue([stepPx / a.width, 0, tapSigma, 0]);
+        drawQuadWithShader(this.device, b, this.haloBlurShader);
+        scope.resolve('halo_source').setValue(b.colorBuffer);
+        scope.resolve('halo_blur').setValue([0, stepPx / a.height, tapSigma, 0]);
+        drawQuadWithShader(this.device, a, this.haloBlurShader);
+    }
+
+    private finish(source: RenderTarget, finish: Finish, fresh = true) {
         const scope = this.device.scope;
         const g = finish.grain;
         this.shownSource = source;
@@ -804,6 +889,19 @@ export class StillFrames {
             vp.frameStyle === 'plain' ? 0 : vp.frameStyle === '120' ? 1 : 2,
             r.w * shape.margin[0], r.h * shape.margin[1], look.rough * r.h / 600
         ]);
+        // halation: remade when the image or its settings changed (not for a
+        // grain redraw of the same image)
+        const ha = finish.halation;
+        const haloOn = ha.amount > 0;
+        if (haloOn) {
+            const key = `${ha.radius}|${filmOn}|${source.width}x${source.height}`;
+            if (fresh || key !== this.haloKey) {
+                this.makeHalo(source, filmOn, ha.radius, r.h);
+                this.haloKey = key;
+            }
+        }
+        scope.resolve('still_halation').setValue(haloOn ? ha.amount : 0);
+        scope.resolve('still_haloMap').setValue(this.halo[0].colorBuffer);
         scope.resolve('frame_base').setValue(look.base);
         scope.resolve('frame_mark').setValue(look.mark);
         const v = finish.vignette;
@@ -847,7 +945,7 @@ export class StillFrames {
     destroy() {
         this.active = false;
         this.pass.enabled = false;
-        for (const rt of [this.frame, ...this.display, this.sum, this.avg, this.geo, ...this.ranges]) {
+        for (const rt of [this.frame, ...this.display, this.sum, this.avg, this.geo, ...this.ranges, ...this.halo]) {
             rt.destroyTextureBuffers();
             rt.destroy();
         }

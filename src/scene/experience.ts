@@ -276,6 +276,30 @@ export const grainRanges = {
 
 export const defaultGrain = (): Grain => ({ enabled: false, intensity: 0.3, size: 1, color: 0, animation: 1 });
 
+// ---- our extras: halation
+//
+// A red-orange glow around strong highlights: light reflected from the film
+// base back into the emulsion (stillFrames.ts). Strong on cinema film
+// without an anti-halation layer, faint on most still film. Stored as
+// `extras.look.halation`.
+
+export type Halation = { amount: number; radius: number };
+
+export const halationRanges = {
+    amount: { min: 0, max: 1, step: 0.01 },
+    radius: { min: 0.3, max: 3, step: 0.05 }
+} as const;
+
+export const defaultHalation = (): Halation => ({ amount: 0, radius: 1 });
+
+export function sceneHalation(s: ExperienceSettings): Halation {
+    const look = s.extras?.look;
+    const h = mergeKnown(defaultHalation(), isObject(look) ? look.halation : undefined);
+    h.amount = clamp(h.amount, halationRanges.amount);
+    h.radius = clamp(h.radius, halationRanges.radius);
+    return h;
+}
+
 export function sceneGrain(s: ExperienceSettings): Grain {
     const look = s.extras?.look;
     const grain = mergeKnown(defaultGrain(), isObject(look) ? look.grain : undefined);

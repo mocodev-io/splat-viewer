@@ -40,6 +40,7 @@ export type FilmProfile = {
     shadowTint: [number, number, number];
     highlightTint: [number, number, number];
     grain?: { intensity: number; size: number; color: number };   // typical grain; set on choosing the film
+    halation?: number;           // typical halation amount; set on choosing the film
     slide?: boolean;             // reversal (slide) film rather than a negative: its frame edge looks different
 };
 
@@ -61,35 +62,40 @@ export const FILMS = {
         matrix: [0.97, 0.03, 0, 0.02, 0.97, 0.01, 0, 0.03, 0.97],
         contrast: 0.88, latShadow: 1.3, latHighlight: 1.2, black: 0.003, white: 0.99, saturation: 0.9,
         shadowTint: [0.97, 1, 1.03], highlightTint: [1.03, 1, 0.94],
-        grain: { intensity: 0.25, size: 1, color: 0.3 }
+        grain: { intensity: 0.25, size: 1, color: 0.3 },
+        halation: 0.15
     },
     ektar100: {
         label: 'Ektar 100', kind: 'color', ...neutral,
         matrix: [1.08, -0.05, -0.03, -0.03, 1.04, -0.01, -0.02, -0.04, 1.06],
         contrast: 1.08, latShadow: 1.25, latHighlight: 1, black: 0.001, white: 1, saturation: 1.18,
         shadowTint: [0.98, 0.99, 1.04], highlightTint: [1.02, 1, 0.97],
-        grain: { intensity: 0.12, size: 0.8, color: 0.25 }
+        grain: { intensity: 0.12, size: 0.8, color: 0.25 },
+        halation: 0.12
     },
     superia400: {
         label: 'Superia 400', kind: 'color', ...neutral,
         matrix: [1, 0, 0, -0.02, 1.02, 0, 0, 0.02, 0.98],
         contrast: 1, latShadow: 1.3, latHighlight: 1.1, black: 0.003, white: 0.99, saturation: 1.08,
         shadowTint: [0.94, 1.03, 1], highlightTint: [1.02, 0.98, 1],
-        grain: { intensity: 0.35, size: 1.1, color: 0.45 }
+        grain: { intensity: 0.35, size: 1.1, color: 0.45 },
+        halation: 0.2
     },
     velvia50: {
         label: 'Velvia 50 (slide)', kind: 'color', slide: true, ...neutral,
         matrix: [1.05, -0.03, -0.02, -0.05, 1.08, -0.03, -0.04, -0.06, 1.1],
         contrast: 1.25, latShadow: 1.1, latHighlight: 0.85, black: 0, white: 1, exposure: -0.2, saturation: 1.25,
         shadowTint: [0.97, 0.98, 1.05], highlightTint: [1, 1, 0.98],
-        grain: { intensity: 0.1, size: 0.7, color: 0.2 }
+        grain: { intensity: 0.1, size: 0.7, color: 0.2 },
+        halation: 0.1
     },
     vision3_500t: {
         label: 'Vision3 500T (tungsten)', kind: 'color', ...neutral,
         whiteBalance: [0.78, 0.92, 1.22],
         contrast: 0.9, latShadow: 1.35, latHighlight: 1.3, black: 0.004, white: 0.99, saturation: 0.95,
         shadowTint: [0.95, 1, 1.02], highlightTint: [1, 1, 1],
-        grain: { intensity: 0.35, size: 1.2, color: 0.35 }
+        grain: { intensity: 0.35, size: 1.2, color: 0.35 },
+        halation: 0.6
     },
     bwNeutral: {
         label: 'B&W neutral', kind: 'bw', ...neutral, matrix: bwRow(0.2126, 0.7152, 0.0722)
@@ -97,22 +103,26 @@ export const FILMS = {
     trix400: {
         label: 'Tri-X 400', kind: 'bw', ...neutral, matrix: bwRow(0.19, 0.63, 0.18),
         contrast: 1.1, latShadow: 1.3, latHighlight: 1.05, black: 0.004,
-        grain: { intensity: 0.45, size: 1.3, color: 0 }
+        grain: { intensity: 0.45, size: 1.3, color: 0 },
+        halation: 0.05
     },
     hp5: {
         label: 'HP5 Plus', kind: 'bw', ...neutral, matrix: bwRow(0.21, 0.62, 0.17),
         contrast: 0.92, latShadow: 1.35, latHighlight: 1.25, black: 0.006,
-        grain: { intensity: 0.4, size: 1.2, color: 0 }
+        grain: { intensity: 0.4, size: 1.2, color: 0 },
+        halation: 0.05
     },
     panf50: {
         label: 'Pan F 50', kind: 'bw', ...neutral, matrix: bwRow(0.25, 0.65, 0.1),
         contrast: 1.3, latShadow: 1.15, latHighlight: 0.95, black: 0.002,
-        grain: { intensity: 0.12, size: 0.7, color: 0 }
+        grain: { intensity: 0.12, size: 0.7, color: 0 },
+        halation: 0.03
     },
     ortho: {
         label: 'Orthochromatic', kind: 'bw', ...neutral, matrix: bwRow(0, 0.42, 0.58),
         contrast: 1.25, latShadow: 1.2, latHighlight: 1, black: 0.003,
-        grain: { intensity: 0.3, size: 1, color: 0 }
+        grain: { intensity: 0.3, size: 1, color: 0 },
+        halation: 0.05
     }
 } satisfies Record<string, FilmProfile>;
 

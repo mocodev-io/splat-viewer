@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
-    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, defaultLensVignette, defaultViewport, FOCUS_MODES,
+    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultHalation, halationRanges, sceneHalation, type Halation, defaultLens, defaultLensVignette, defaultViewport, FOCUS_MODES,
     FRAME_STYLES, FRAME_TINTS, type FrameStyle, type FrameTint,
     grainRanges, lensRanges, ranges, sceneFilm, sceneGrain, sceneLensVignette, SENSOR_NAMES, SENSORS, TONEMAPPING,
     type ExperienceSettings, type Grain, type Lens, type LensVignette, type PostEffectSettings,
@@ -258,6 +258,8 @@ export function useLookPanel() {
                 highPrecision: { value: false, label: 'High precision' }
             }, { collapsed: true }),
             Effects: folder({
+                halation: { value: 0, ...halationRanges.amount, label: 'Halation' },
+                halationRadius: { value: defaultHalation().radius, ...halationRanges.radius, label: 'Halation radius' },
                 grain: { value: 0, ...grainRanges.intensity, label: 'Grain' },
                 grainSize: { value: g.size, ...grainRanges.size, label: 'Grain size' },
                 grainColor: { value: g.color, ...grainRanges.color, label: 'Grain color', render: get => filmKind(get) !== 'bw' },
@@ -277,8 +279,9 @@ export function useLookPanel() {
             loadedFilm.current = null;
             return;
         }
-        const grain = (FILMS[v.film as FilmId] as FilmProfile).grain;
-        if (grain) set({ grain: grain.intensity, grainSize: grain.size, grainColor: grain.color });
+        const profile = FILMS[v.film as FilmId] as FilmProfile;
+        if (profile.grain) set({ grain: profile.grain.intensity, grainSize: profile.grain.size, grainColor: profile.grain.color });
+        if (profile.halation !== undefined) set({ halation: profile.halation });
     }, [v.film, set]);
 
     const brightness = 2 ** v.exposure;
@@ -296,6 +299,7 @@ export function useLookPanel() {
     };
     const film: FilmSettings = { id: v.film as FilmId, filter: v.filmFilter as BwFilter, strength: v.filmStrength };
     const lensVignette: LensVignette = { physical: v.vignettePhysical, roundness: v.vignetteRoundness };
+    const halation: Halation = { amount: v.halation, radius: v.halationRadius };
     const grain: Grain = {
         enabled: v.grain > 0, intensity: v.grain, size: v.grainSize, color: v.grainColor, animation: v.grainAnimation
     };
@@ -305,6 +309,7 @@ export function useLookPanel() {
     const apply = (s: ExperienceSettings) => {
         const p = s.postEffectSettings;
         const gr = sceneGrain(s);
+        const ha = sceneHalation(s);
         const sv = sceneLensVignette(s);
         const fm = sceneFilm(s);
         const m = toMidpoint(p.vignette.inner, p.vignette.outer);
@@ -330,6 +335,8 @@ export function useLookPanel() {
             vignetteCurvature: p.vignette.curvature,
             diffusion: Math.min(on(p.bloom.enabled, p.bloom.intensity) / BLOOM_MAX, 1),
             diffusionRadius: p.bloom.blurLevel,
+            halation: ha.amount,
+            halationRadius: ha.radius,
             grain: on(gr.enabled, gr.intensity),
             grainSize: gr.size,
             grainColor: gr.color,
@@ -342,6 +349,7 @@ export function useLookPanel() {
         highPrecision: v.highPrecision,
         postEffects,
         grain,
+        halation,
         film,
         lensVignette,
         apply
