@@ -15,7 +15,7 @@ import { FrameStats } from './viewer/FrameStats';
 import { ScenePointer } from './viewer/ScenePointer';
 import { AutoFocus } from './viewer/AutoFocus';
 import { MeasureOverlay, measuredLength } from './viewer/MeasureOverlay';
-import { useDebugPanel, useLensPanel, useLookPanel, useSplatPanel } from './ui/panel';
+import { useDebugPanel, useLensPanel, useLookPanel, useScenePanel } from './ui/panel';
 
 type Framing = { pose: CameraPose; radius: number };
 
@@ -132,7 +132,7 @@ export function App() {
     const live = useRef({ look, lensPanel, experience, framing, measurePoints });
     live.current = { look, lensPanel, experience, framing, measurePoints };
     // the splat panel is made further down (its buttons need the handlers)
-    const splatRef = useRef<ReturnType<typeof useSplatPanel> | null>(null);
+    const splatRef = useRef<ReturnType<typeof useScenePanel> | null>(null);
 
     // Manual focus follows the slider. Switching from auto to manual keeps
     // the distance autofocus had reached, as a camera does.
@@ -230,7 +230,7 @@ export function App() {
 
     const onError = useCallback((message: string) => setStatus(`failed: ${message}`), []);
 
-    const splatPanel = useSplatPanel({
+    const splatPanel = useScenePanel({
         splats: splats ?? [], onLoad: load, onUnload: unload, onResetView: resetView, onSave: save
     });
 

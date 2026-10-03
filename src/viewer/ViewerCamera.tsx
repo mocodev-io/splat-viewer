@@ -6,7 +6,7 @@ import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import {
-    horizontalFov, type CameraPose, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    horizontalFov, ranges, type CameraPose, type Grain, type Lens, type LensVignette, type PostEffectSettings,
     type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
@@ -190,7 +190,8 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         vignette: vignetteFor(postEffects, lensVignette, lens),
         sensor: [lens.sensorWidth, lens.sensorHeight],
         focalLength: lens.focalLength,
-        passepartout
+        passepartout,
+        diffusion: postEffects.bloom.enabled ? postEffects.bloom.intensity / ranges.bloom.intensity.max : 0
     } satisfies Finish);
     const finish = useMemo(() => JSON.parse(finishKey) as Finish, [finishKey]);
     useEffect(() => {
@@ -219,7 +220,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         app, controls, frame, lens, focus, progress, busy,
         accumulate: lens.dof && debugView === 'image',
         depthRange: depthView > 0,
-        sceneKey: JSON.stringify([sceneKey, stillLens(lens), tonemapping, highPrecision, { ...postEffects, fringing: null, vignette: null },
+        sceneKey: JSON.stringify([sceneKey, stillLens(lens), tonemapping, highPrecision, { ...postEffects, fringing: null, vignette: null, bloom: null },
             background, debugView, depthRange, farClip]),
         finish
     });

@@ -220,6 +220,7 @@ const finishGLSL = /* glsl */ `
     uniform vec4 still_vignette;  // mode (0 off, 1 by hand, 2 physical), amount, start, end
     uniform vec4 still_vignette2; // roundness, optical vignetting at the corner (stops), passepartout, -
     uniform vec4 still_film;      // film on (1), exposure (stops), black, white
+    uniform float still_veil;     // veiling light of a diffusion filter, linear
     uniform vec4 film_curve;      // contrast, shadow latitude, highlight latitude, saturation
     uniform mat3 film_matrix;     // colour sensitivity (rows)
     uniform vec3 film_balance;    // white balance
@@ -268,10 +269,13 @@ const finishGLSL = /* glsl */ `
         // the lens: vignette as light lost; then the film
         float mode = still_vignette.x;
         bool film = still_film.x > 0.5;
-        if (mode > 0.5 || film) {
+        if (mode > 0.5 || film || still_veil > 0.0) {
             // film: the image arrives as scene-linear light, log encoded
             // (lensDof.ts); without film, tone mapped and gamma encoded
             vec3 lin = film ? exp2(c * 16.0 - 12.0) * step(vec3(1.0 / 1024.0), c) : pow(max(c, vec3(0.0)), vec3(2.2));
+            // a diffusion filter scatters a little of all the light over the
+            // whole image: the darkest parts lift, as with a Pro-Mist
+            lin += still_veil;
             if (mode > 1.5) {
                 float t = length(mm) / still_optics.z;           // tan of the angle to this point
                 float cos2 = 1.0 / (1.0 + t * t);
@@ -351,7 +355,12 @@ export type Finish = {
     sensor: [number, number];    // mm; gives the frame its aspect and the vignette its geometry
     focalLength: number;         // mm
     passepartout: number;        // 0 the overscan shows, 1 black
+    diffusion: number;           // diffusion filter, 0–1 (its glow is the engine's bloom)
 };
+
+// veiling light of a diffusion filter at full strength, as linear light
+// added everywhere (0.004 lifts black to about 8 % grey)
+const VEIL = 0.004;
 
 // Optical vignetting of a lens wide open, at the image corner: about one
 // and a half stops at f/1.4, gone by f/5.6.
@@ -681,6 +690,7 @@ export class StillFrames {
         // it lies the same counted from the bottom (gl_FragCoord) as from the top
         scope.resolve('still_rect').setValue([Math.round(r.x), Math.round(r.y), Math.round(r.x + r.w), Math.round(r.y + r.h)]);
         scope.resolve('still_optics').setValue([sensorW, sensorH, finish.focalLength, 0]);
+        scope.resolve('still_veil').setValue(finish.diffusion * VEIL);
         scope.resolve('still_film').setValue([filmOn ? 1 : 0, profile.exposure, profile.black, profile.white]);
         scope.resolve('film_curve').setValue([profile.contrast, profile.latShadow, profile.latHighlight, profile.saturation]);
         const m = profile.matrix;   // rows, to column-major

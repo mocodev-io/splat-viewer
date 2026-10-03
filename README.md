@@ -35,7 +35,22 @@ writes, so a scene prepared there opens here with the same start camera,
 tone mapping, background and post effects. Without a settings file the
 viewer frames the splat itself.
 
-**Save settings** (Splat folder) downloads the current look, view and lens as
+### The panels
+
+They follow how a camera is put together:
+
+- **Scene**: the splat file, its orientation, the background, Load /
+  Unload / Reset view / Save settings, and **Scale**.
+- **Camera**: the sensor, and **Framing** (passepartout).
+- **Lens**: focal length and f-stop; **Focus**, **Depth of field**,
+  **Bokeh**, and **Optics** (chromatic aberration, vignette, diffusion).
+- **Look**: the film and its development, laid out as Lightroom's Develop
+  module: **Profile**, **Basic**, **Detail**, **Effects**.
+- **Debug**.
+
+Where a control sits in the panel does not change how it is saved.
+
+**Save settings** (Scene) downloads the current look, view and lens as
 such a file, keeping anything else the loaded file had (annotations, tracks,
 other extras). Put it next to the splat.
 
@@ -146,10 +161,11 @@ The lens is saved under `extras.lens`, with the still settings
 file; a file without a lens, from SuperSplat say, gets the focal length
 that matches its `fov`.
 
-### The look: profile, basic, detail, optics, effects
+### Look and optics
 
 The **Look** panel is laid out as Lightroom's Develop module. As there, an
-effect is off at amount 0; there are no separate on / off switches.
+effect is off at amount 0; there are no separate on / off switches (the
+lens optics work the same way).
 
 - **Profile**: the film stock (below), its **Filter** for black and white,
   and **Amount** (0 the neutral curve of the same kind, 1 the full film).
@@ -158,11 +174,9 @@ effect is off at amount 0; there are no separate on / off switches.
   SuperSplat's grading, applied to the light before the film or the tone
   mapping.
 - **Detail**: **Sharpening**, **High precision** (scene rendering format).
-- **Optics**, what the lens adds: **Chromatic aberration** and the
-  **Vignette** (below).
-- **Effects**: **Bloom** and its radius, and the film **Grain** (below).
-
-The background colour moved to the Splat panel; it belongs to the scene.
+- **Effects**: the film **Grain** (below).
+- **Lens → Optics**, what the lens and a filter in front of it add:
+  **Chromatic aberration**, the **Vignette** and **Diffusion** (below).
 
 Optics and film finish the image the way a camera does: first the lens,
 then the film. They are measured from the frame, and work the same while
@@ -195,6 +209,12 @@ the camera moves, while a still builds up and once it is done.
     around 0.6 suits those (1 is the lens as computed).
   - Stored as SuperSplat's `vignette` (amount, inner and outer for midpoint
     and feather) plus `extras.look.vignette` (`physical`, `roundness`).
+- **Diffusion**: a diffusion filter in front of the lens (Pro-Mist and
+  the like): a soft glow around the lights, the engine's bloom over the
+  whole HDR image, and a little veiling light that lifts the blacks.
+  **Diffusion radius** is how far the glow spreads. Stored as SuperSplat's
+  `bloom` (amount 1 is its largest intensity), so SuperSplat shows the
+  glow too.
 - **Film** (Profile): with a stock chosen the camera does no tone mapping
   and hands the film scene-linear light (log encoded over 16 stops in a
   10-bit frame). The film's sensitivity per colour and its characteristic
