@@ -130,8 +130,9 @@ distance, no separate field of view.
     effective samples, so they are a little grainier at low quality.
 
   The quick DoF while the camera moves stays round.
-- When nothing changes the viewer stops rendering: after the still is
-  finished, or after a second without lens DoF. The HUD shows `idle`; any
+- When nothing changes the viewer stops rendering: once the last sample of
+  a still is in (the last group eases in without rendering the scene
+  again), or after a second without lens DoF. The HUD shows `idle`; any
   change (camera, panel, focus, window size) starts rendering again.
 - **Scale**: splats have no scale of their own, and the DoF needs one.
   Press **Measure**, click both ends of something of known size (a door is
@@ -281,6 +282,7 @@ src/
   viewer/SceneObjects.tsx  objects and their lighting from the scene data
   viewer/ViewerCamera.tsx  camera, CameraControls, CameraFrame (post effects, lens)
   viewer/lensDof.ts        quick DoF while moving, debug depth views (compose shader)
+  viewer/engine.ts         engine internals the viewer uses, each checked
   viewer/stillFrames.ts    HDR accumulation for the still DoF (inside CameraFrame), presenting
                            with aberration, vignette, film type, grain and passepartout
   viewer/useStillDof.ts    moving / still / idle, aperture samples for the camera
@@ -322,8 +324,7 @@ Notes:
   The viewer replaces its compose function (`composeDofPS`, through the
   engine's ShaderChunks API) with its own gather; the engine's DoF stays on
   only for the scene depth and that hook, with its own blur passes at their
-  cheapest. When bumping the engine, check that chunk still has the same
-  place in the compose shader.
+  cheapest.
 - The still DoF averages the aperture samples in linear HDR, inside
   CameraFrame: a pass of its own runs right after the scene pass and the
   bloom downsample, the engine's DoF passes and the compose pass read the
@@ -331,9 +332,15 @@ Notes:
   bokeh disc stay bright, and tone mapping, grading, vignette, sharpening
   and bloom work on the averaged image. This relies on the engine's
   `FramePassCameraFrame` internals (its scene pass, `frameUpdate` and the
-  passes reading the scene texture); check them when bumping the engine.
-  Each aperture sample is a full render: quality is a trade between
+  passes reading the scene texture). Each aperture sample is a full render: quality is a trade between
   smoothness and time.
+- Everything used beyond the engine's public API (those pass internals, the
+  compose chunk names, the depth format flag, the splat depth switch, the
+  orbit distance of CameraControls) goes through `viewer/engine.ts`, which
+  checks each one. The engine is pinned (2.23.0); after an update anything
+  missing is reported once in the console and the HUD (`engine hooks
+  missing`), and the still DoF switches itself off instead of hanging, so
+  the viewer keeps working with the quick DoF.
 - Splat edges are soft. The splat scene depth is accumulated with the same
   premultiplied blending as the colour: per pixel the coverage-weighted
   sum of 1 / depth, plus the uncovered rest times the value it is cleared

@@ -6,6 +6,7 @@ import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { frameRect, sensorAspect, type Lens } from '../scene/experience';
 import { StillFrames, type Finish } from './stillFrames';
 import { Aperture, APERTURE_GROUP } from './aperture';
+import { cameraFramePass, depthIsReciprocal, engineProblems, stillHooksOk } from './engine';
 
 /** Aperture samples per still, by quality. */
 export const STILL_SAMPLES = { low: 16, medium: 48, high: 128 } as const;
@@ -60,8 +61,14 @@ const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
 //   (its shape gives the bokeh, aperture.ts) and its frustum sheared so the
 //   focus plane stays in place; the samples are averaged in HDR inside the
 //   frame (stillFrames.ts), with a shrinking over-blur on top;
+// - once the last sample is in, the composed average no longer changes:
+//   rendering stops and the screen eases in on that frame without it (only
+//   the drawing to the canvas runs, on each tick);
 // - done, or nothing changed for a second without lens DoF: no rendering at
-//   all until something changes (the canvas keeps the last image).
+//   all until something changes (the canvas keeps the last image; moving
+//   grain is drawn on it, stillFrames.ts).
+//
+// Without the engine hooks the still needs (engine.ts), it stays in moving.
 //
 // Returns the state: the mode, `overblur`, the gather radius scale for this
 // frame (1 while moving), and `range`, the depth range for the normalized
@@ -73,6 +80,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         changedAt: 0,
         mode: 'moving' as Mode,
         start: false,
+        easing: false,                               // all samples in, easing in without rendering
         prev: pose(),                                // the pose of the previous tick
         anchor: pose(),                              // the pose the still started at
         overblur: 1,
@@ -142,7 +150,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         const cc = controls.current;
         const sf = still.current;
         if (!cc || !sf) return;
-        const { focus, accumulate, busy, sceneKey, lens } = live.current;
+        const { focus, busy, sceneKey, lens } = live.current;
+        const hooksOk = stillHooksOk();
+        const accumulate = live.current.accumulate && hooksOk;
         const s = state.current;
         const now = performance.now();
         const camera = cc.entity.camera!;
@@ -166,10 +176,11 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
 
         const other = `${focus.current.toFixed(4)}|${width}x${height}|${sceneKey}`;
         const moving = other !== s.other || busy || step > STEP_PX || drift > DRIFT_PX;
-        if (moving) {
+        if (moving || (!hooksOk && s.mode !== 'moving')) {
             s.other = other;
             s.changedAt = now;
             s.mode = 'moving';
+            s.easing = false;
             app.autoRender = true;
         } else if (s.mode === 'moving' && accumulate) {
             s.mode = 'still';
@@ -179,11 +190,19 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         }
         if (s.mode === 'moving' && !accumulate && now - s.changedAt > 1000) app.autoRender = false;
 
-        // not rendering this frame: keep the grain moving on the last image
-        if (!app.autoRender && !app.renderNextFrame) sf.refresh(live.current.finish);
-
         const total = STILL_SAMPLES[lens.blurQuality];
-        progress.current = s.mode === 'still' ? `still ${sf.count}/${total}` : s.mode === 'done' ? 'still' : '';
+        if (s.mode === 'still' && s.easing) {
+            // the last average is composed: ease the screen in on it, no render
+            sf.present(true, lens.stillFade, live.current.finish);
+            if (sf.settled) s.mode = 'done';
+        } else if (!app.autoRender && !app.renderNextFrame) {
+            // not rendering this frame: keep the grain moving on the last image
+            sf.refresh(live.current.finish);
+        }
+
+        const problems = engineProblems();
+        progress.current = (s.mode === 'still' ? `still ${sf.count}/${total}` : s.mode === 'done' ? 'still' : '')
+            + (problems.length ? ` engine hooks missing (${problems.length}, see console)` : '');
     });
 
     useAppEvent('prerender', () => {
@@ -192,10 +211,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         const s = state.current;
         if (sf.resize() && s.mode !== 'moving') s.mode = 'moving';
         s.jitter = null;
-        // the engine CameraFrame behind the script (not in its types)
-        const engine = (frame.current as unknown as { engineCameraFrame?: { renderPassCamera: unknown } } | null)?.engineCameraFrame;
+        const engine = cameraFramePass(frame.current);
         const camera = controls.current?.entity.camera;
-        const reciprocal = !!(camera as unknown as { shaderParams?: { sceneDepthMapReciprocal: boolean } } | undefined)?.shaderParams?.sceneDepthMapReciprocal;
+        const reciprocal = depthIsReciprocal(camera);
         const range = live.current.depthRange && camera ? { far: camera.farClip, reciprocal } : null;
         s.range = sf.range;
         if (s.mode !== 'still') {
@@ -207,6 +225,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         if (s.start) {
             sf.start();
             s.start = false;
+            s.easing = false;
         }
         const { lens, focus } = live.current;
         // all samples in: keep rendering the average until the screen has eased in
@@ -234,9 +253,12 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
             // whole groups, eased in (stillFrames.ts); done once all are in
             // and the screen has caught up
             sf.present(true, lens.stillFade, finish);
-            if (sf.count >= STILL_SAMPLES[lens.blurQuality] && sf.settled) {
-                s.mode = 'done';
+            if (sf.count >= STILL_SAMPLES[lens.blurQuality]) {
+                // this frame composed the final average: the rest of the
+                // easing in needs no render (see the update handler)
                 app.autoRender = false;
+                s.easing = true;
+                if (sf.settled) s.mode = 'done';
             }
         } else {
             sf.present(false, lens.stillFade, finish);

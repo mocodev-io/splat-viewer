@@ -59,9 +59,10 @@
 
 import { APERTURE_GROUP } from './aperture';
 import { frameRect, type FilmType, type Grain } from '../scene/experience';
+import { composeReadsScene, type CameraFramePass } from './engine';
 import {
     ADDRESS_CLAMP_TO_EDGE, BLENDEQUATION_ADD, BLENDMODE_ONE, BlendState, FILTER_LINEAR, FILTER_NEAREST,
-    FramePass, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, PIXELFORMAT_RGBA8, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
+    FramePass, PIXELFORMAT_RG32F, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, PIXELFORMAT_RGBA8, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
     drawQuadWithShader, type AppBase, type GraphicsDevice, type Shader
 } from 'playcanvas';
 
@@ -84,9 +85,11 @@ const accumulateGLSL = /* glsl */ `
     }
 `;
 
-// The weighted average, for the passes after the scene pass. Its alpha is
-// the coverage of the held view (see `geo`), which the DoF needs to correct
-// the splat depth (lensDof.ts) for the over-blur.
+// The weighted average, for the passes after the scene pass, written each
+// time a whole group of samples is in (the still shows whole groups only),
+// so it holds until the next one. Its alpha is the coverage of the held view
+// (see `geo`), which the DoF needs to correct the splat depth (lensDof.ts)
+// for the over-blur.
 const averageGLSL = /* glsl */ `
     varying vec2 uv0;
     uniform sampler2D still_sum;
@@ -102,22 +105,13 @@ const averageGLSL = /* glsl */ `
     }
 `;
 
-// A plain copy.
-const copyGLSL = /* glsl */ `
-    varying vec2 uv0;
-    uniform sampler2D still_source;
-    void main() {
-        gl_FragColor = texture2D(still_source, uv0);
-    }
-`;
-
 // The scene depth and coverage of a moving frame, kept for the still.
 const captureGLSL = /* glsl */ `
     varying vec2 uv0;
     uniform highp sampler2D still_depth;
     uniform sampler2D still_scene;
     void main() {
-        gl_FragColor = vec4(texture2D(still_depth, uv0).r, texture2D(still_scene, uv0).a, 0.0, 1.0);
+        gl_FragColor = vec4(texture2D(still_depth, uv0).r, texture2D(still_scene, uv0).a, 0.0, 0.0);
     }
 `;
 
@@ -217,7 +211,7 @@ const finishGLSL = /* glsl */ `
     uniform sampler2D still_image;
     uniform vec4 still_finish;    // aberration scale at the edge, grain intensity, grain size (pixels), grain colour
     uniform float still_seed;
-    uniform vec4 still_frame;     // the frame in pixels: x0, y0, x1, y1
+    uniform vec4 still_rect;      // the frame in pixels: x0, y0, x1, y1
     uniform vec4 still_optics;    // sensor width, height, focal length (mm), black and white (1)
     uniform vec4 still_vignette;  // mode (0 off, 1 by hand, 2 physical), amount, start, end
     uniform vec4 still_vignette2; // roundness, optical vignetting at the corner (stops), passepartout, -
@@ -254,8 +248,8 @@ const finishGLSL = /* glsl */ `
         }
 
         // where this pixel lies: -1..1 over the frame, and on the sensor (mm)
-        vec2 frameCentre = (still_frame.xy + still_frame.zw) * 0.5;
-        vec2 frameHalf = (still_frame.zw - still_frame.xy) * 0.5;
+        vec2 frameCentre = (still_rect.xy + still_rect.zw) * 0.5;
+        vec2 frameHalf = (still_rect.zw - still_rect.xy) * 0.5;
         vec2 q = (gl_FragCoord.xy - frameCentre) / frameHalf;
         vec2 mm = q * 0.5 * still_optics.xy;
         float rCircle = length(mm) / (0.5 * length(still_optics.xy));   // 1 in the corner
@@ -309,7 +303,7 @@ const finishGLSL = /* glsl */ `
 
         // the passepartout over the overscan
         vec2 fp = gl_FragCoord.xy;
-        if (any(lessThan(fp, still_frame.xy)) || any(greaterThan(fp, still_frame.zw))) c *= 1.0 - still_vignette2.z;
+        if (any(lessThan(fp, still_rect.xy)) || any(greaterThan(fp, still_rect.zw))) c *= 1.0 - still_vignette2.z;
 
         gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
     }
@@ -378,16 +372,6 @@ function quadShader(device: GraphicsDevice, name: string, fragmentGLSL: string):
     });
 }
 
-// What we use of the engine's FramePassCameraFrame (not in its public types).
-type CameraFramePass = FramePass & {
-    rt: RenderTarget | null;
-    sceneDepthTexture: Texture | null;
-    scenePass: FramePass | null;
-    scenePassTransparent: FramePass | null;
-    composePass: { sceneTexture: Texture } | null;
-    scenePassHalf: { setSourceTexture(t: Texture): void } | null;
-    dofPass: { setSceneTexture(t: Texture): void } | null;
-};
 const HOOKED = Symbol('stillFrames');
 
 // Runs right after the scene pass: keeps the depth of a moving frame, or for
@@ -407,14 +391,13 @@ export class StillFrames {
     readonly frame: RenderTarget;          // the camera composes here
     private display: [RenderTarget, RenderTarget];   // what is on screen during the still, and the next
     private sum: RenderTarget;             // weighted sum of aperture samples, linear HDR
-    private groups: RenderTarget;          // the sum as it was after the last whole group of samples
     private lastShown = 0;                 // samples in the group being eased in
     private sinceGroup = 0;                // frames since that group came in
     private fade = 0.35;                   // part of the way to a new group per frame
     private seed = -1;                     // grain pattern last drawn
     private shownSource: RenderTarget | null = null;   // what is on the canvas, before finishing
-    private avg: RenderTarget;             // their average, read by the passes after the scene pass
-    private geo: RenderTarget;             // depth and coverage of the last moving frame
+    private avg: RenderTarget;             // the average of the whole groups in, read by the passes after the scene pass
+    private geo: RenderTarget;             // depth and coverage of the last moving frame (RG32F)
     private geoValid = false;
     private ranges: [RenderTarget, RenderTarget];   // depth range, this frame's and the previous (1 x 1)
     private rangeFrames = 0;               // frames the range has been followed
@@ -423,7 +406,6 @@ export class StillFrames {
     private pass: AccumulatePass;
     private accumulateShader: Shader;
     private averageShader: Shader;
-    private copyShader: Shader;
     private rangeShader: Shader;
     private captureShader: Shader;
     private restoreShader: Shader;
@@ -463,13 +445,12 @@ export class StillFrames {
             target(device, 'StillDisplayB', PIXELFORMAT_RGBA8, false, FILTER_LINEAR)
         ];
         this.sum = target(device, 'StillSum', PIXELFORMAT_RGBA16F, false);
-        this.groups = target(device, 'StillGroups', PIXELFORMAT_RGBA16F, false);
         this.avg = target(device, 'StillAverage', PIXELFORMAT_RGBA16F, false, FILTER_LINEAR);
-        this.geo = target(device, 'StillGeometry', PIXELFORMAT_RGBA32F, false);
+        // two channels: depth and coverage
+        this.geo = target(device, 'StillGeometry', PIXELFORMAT_RG32F, false);
         this.pass = new AccumulatePass(device, this);
         this.accumulateShader = quadShader(device, 'StillAccumulate', accumulateGLSL);
         this.averageShader = quadShader(device, 'StillAverage', averageGLSL);
-        this.copyShader = quadShader(device, 'StillCopy', copyGLSL);
         this.rangeShader = quadShader(device, 'StillRange', rangeGLSL);
         const range = (name: string) => {
             const colorBuffer = new Texture(device, {
@@ -510,14 +491,13 @@ export class StillFrames {
      * for a moving frame whether to keep its depth for a coming still, and
      * whether to follow the depth range for the normalized depth view.
      */
-    prepare(cameraFrame: { renderPassCamera: unknown } | undefined, active: boolean, sample: [number, number, number] | null,
+    prepare(rpc: CameraFramePass | null, active: boolean, sample: [number, number, number] | null,
         capture: boolean, range: { far: number; reciprocal: boolean } | null) {
         this.active = active;
         this.sample = active ? sample : null;
         this.capture = !active && capture;
         if (!range) this.rangeFrames = 0;
         this.rangeOptions = range;
-        const rpc = cameraFrame?.renderPassCamera as CameraFramePass | null | undefined;
         if (rpc) this.hook(rpc);
     }
 
@@ -544,7 +524,7 @@ export class StillFrames {
             this.pass.enabled = (this.active || this.capture || !!this.rangeOptions) && !!this.scene;
             if (!this.pass.enabled || !this.active) return;
             const avg = this.avg.colorBuffer;
-            rpc.composePass!.sceneTexture = avg;
+            if (rpc.composePass && composeReadsScene(rpc)) rpc.composePass.sceneTexture = avg;
             rpc.scenePassHalf?.setSourceTexture(avg);
             rpc.dofPass?.setSceneTexture(avg);
         };
@@ -555,7 +535,7 @@ export class StillFrames {
         const scene = this.scene;
         if (!scene) return;
         if (this.sum.width !== scene.width || this.sum.height !== scene.height) {
-            for (const rt of [this.sum, this.groups, this.avg, this.geo]) rt.resize(scene.width, scene.height);
+            for (const rt of [this.sum, this.avg, this.geo]) rt.resize(scene.width, scene.height);
             this.count = 0;
             this.geoValid = false;
         }
@@ -605,19 +585,16 @@ export class StillFrames {
             drawQuadWithShader(this.device, this.sum, this.accumulateShader);
             this.count++;
             this.sample = null;
-            // the still shows whole groups only
+            // the still shows whole groups only: a new average once one is complete
             if (this.count % APERTURE_GROUP === 0) {
-                scope.resolve('still_source').setValue(this.sum.colorBuffer);
+                scope.resolve('still_sum').setValue(this.sum.colorBuffer);
+                scope.resolve('still_scene').setValue(scene);
+                scope.resolve('still_geo').setValue(this.geo.colorBuffer);
+                scope.resolve('still_geoValid').setValue(restore ? 1 : 0);
                 this.device.setBlendState(BlendState.NOBLEND);
-                drawQuadWithShader(this.device, this.groups, this.copyShader);
+                drawQuadWithShader(this.device, this.avg, this.averageShader);
             }
         }
-        scope.resolve('still_sum').setValue(this.groups.colorBuffer);
-        scope.resolve('still_scene').setValue(scene);
-        scope.resolve('still_geo').setValue(this.geo.colorBuffer);
-        scope.resolve('still_geoValid').setValue(restore ? 1 : 0);
-        this.device.setBlendState(BlendState.NOBLEND);
-        drawQuadWithShader(this.device, this.avg, this.averageShader);
     }
 
     /**
@@ -671,7 +648,7 @@ export class StillFrames {
         scope.resolve('still_seed').setValue(this.seed);
         // the canvas has the same size as the source; the frame is centred, so
         // it lies the same counted from the bottom (gl_FragCoord) as from the top
-        scope.resolve('still_frame').setValue([Math.round(r.x), Math.round(r.y), Math.round(r.x + r.w), Math.round(r.y + r.h)]);
+        scope.resolve('still_rect').setValue([Math.round(r.x), Math.round(r.y), Math.round(r.x + r.w), Math.round(r.y + r.h)]);
         scope.resolve('still_optics').setValue([sensorW, sensorH, finish.focalLength, bw ? 1 : 0]);
         scope.resolve('still_vignette').setValue(
             v.mode === 'hand' ? [1, v.amount, v.start, Math.max(v.end, v.start + 1e-3)]
@@ -696,7 +673,7 @@ export class StillFrames {
     destroy() {
         this.active = false;
         this.pass.enabled = false;
-        for (const rt of [this.frame, ...this.display, this.sum, this.groups, this.avg, this.geo, ...this.ranges]) {
+        for (const rt of [this.frame, ...this.display, this.sum, this.avg, this.geo, ...this.ranges]) {
             rt.destroyTextureBuffers();
             rt.destroy();
         }

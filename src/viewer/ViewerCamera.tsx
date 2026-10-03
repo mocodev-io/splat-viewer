@@ -12,6 +12,7 @@ import {
 import type { DebugView, DepthRange } from '../ui/panel';
 import { updateLensDof, type DepthView } from './lensDof';
 import { useStillDof } from './useStillDof';
+import { orbitDistance } from './engine';
 import type { Finish, FinishVignette } from './stillFrames';
 
 export type ViewRequest = { pose: CameraPose; id: number };
@@ -87,7 +88,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
                 const p = entity().getPosition();
                 // CameraControls keeps its orbit distance privately; the
                 // target is that far along the view direction
-                const distance = (cc as unknown as { _pose?: { distance?: number } })._pose?.distance || 1;
+                const distance = orbitDistance(cc) || 1;
                 const t = entity().forward.clone().mulScalar(distance).add(p);
                 return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z] };
             },

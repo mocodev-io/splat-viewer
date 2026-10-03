@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useApp } from '@playcanvas/react/hooks';
 import { installLensDof } from './lensDof';
+import { enableSplatDepth } from './engine';
 
 // Scene-wide splat settings, applied once before anything loads.
 // Values follow the SuperSplat viewer (viewer.ts), except sceneDepthWrite.
@@ -12,7 +13,7 @@ export function SplatSetup() {
         // Splats write their (coverage weighted) depth in the scene pass, so
         // depth-based effects (DoF, fog, SSAO) and mixed-in meshes see them.
         // Engine PR #9174; needs CameraFrame without MSAA.
-        gsplat.sceneDepthWrite = true;
+        enableSplatDepth(app);
         // sorting by distance instead of view depth: no unsorted splats at the
         // screen sides while turning on slow devices
         gsplat.radialSorting = true;

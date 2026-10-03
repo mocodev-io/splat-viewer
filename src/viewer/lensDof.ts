@@ -16,9 +16,10 @@
 // c∞ is the blur of a point at infinity; behind the focus plane the blur
 // levels off towards it, in front of it it keeps growing.
 
-import { SHADERLANGUAGE_GLSL, ShaderChunks, type AppBase, type Texture } from 'playcanvas';
+import type { AppBase, Texture } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { frameRect, sensorAspect, type Lens } from '../scene/experience';
+import { depthIsReciprocal, setShaderChunks, verifyShaderChunks } from './engine';
 
 const composeDofGLSL = /* glsl */ `
     #ifdef DOF
@@ -265,9 +266,7 @@ const composeMainEndGLSL = /* glsl */ `
 
 /** Puts the lens DoF into the engine's compose shader. Call once, before DoF is first switched on. */
 export function installLensDof(app: AppBase) {
-    const chunks = ShaderChunks.get(app.graphicsDevice, SHADERLANGUAGE_GLSL);
-    chunks.set('composeDofPS', composeDofGLSL);
-    chunks.set('composeMainEndPS', composeMainEndGLSL);
+    setShaderChunks(app, 'composePS', { composeDofPS: composeDofGLSL, composeMainEndPS: composeMainEndGLSL });
 }
 
 /** Normalized depth view: 0 off, 1 linear, 2 inverse. */
@@ -295,6 +294,7 @@ const BLUR_VIEW_WHITE = 0.025;
  */
 export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, still: boolean,
     view: DepthView, range: { texture: Texture; ready: boolean }) {
+    verifyShaderChunks(app);
     const dof = cf.dof;
     dof.highQuality = false;
     dof.nearBlur = false;
@@ -312,7 +312,7 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
 
     // the splat scene depth is stored as 1 / depth; a depth prepass stores it linear
     const camera = cf.entity.camera!;
-    const reciprocal = (camera as unknown as { shaderParams: { sceneDepthMapReciprocal: boolean } }).shaderParams.sceneDepthMapReciprocal;
+    const reciprocal = depthIsReciprocal(camera);
     const scope = device.scope;
     // the soft rim of splat edges, roughly a percent of the image height
     const edgeBand = 0.01 * frame.h;
