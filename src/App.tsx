@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FILLMODE_FILL_WINDOW, RESOLUTION_AUTO, type BoundingBox } from 'playcanvas';
 import { Application } from '@playcanvas/react';
 import {
-    defaultExperience, lensRanges, sensorAspect, loadExperience, sceneLens, sceneLighting, sceneObjects, sceneViewport,
+    defaultExperience, frameShape, lensRanges, loadExperience, sceneLens, sceneLighting, sceneObjects, sceneViewport,
     settingsUrlFor, verticalFov,
     type CameraPose, type ExperienceSettings, type SceneObject, type Vec3Tuple
 } from './scene/experience';
@@ -279,7 +279,7 @@ export function App() {
                     grain={look.grain}
                     film={look.film}
                     lensVignette={look.lensVignette}
-                    passepartout={lensPanel.viewport.passepartout}
+                    viewport={lensPanel.viewport}
                     background={splatPanel.background}
                     sceneKey={sceneKey}
                     busy={!!loaded && !framing}
@@ -305,7 +305,7 @@ export function App() {
                 <AutoFocus
                     active={!!loaded && lens.dof && lens.focusMode === 'auto'}
                     showFrame={lens.afFrame}
-                    frameAspect={sensorAspect(lens)}
+                    frameShape={frameShape(lens, lensPanel.viewport.frameStyle)}
                     point={afPoint}
                     transition={lens.afTransition}
                     metersPerUnit={lens.metersPerUnit}

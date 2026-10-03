@@ -58,7 +58,7 @@
 // stops rendering, only this last step is repeated (`refresh`).
 
 import { APERTURE_GROUP } from './aperture';
-import { frameRect, type Grain } from '../scene/experience';
+import { frameRect, frameShape, type FrameTint, type Grain, type Viewport } from '../scene/experience';
 import { resolveFilm, type FilmSettings } from '../scene/films';
 import { composeReadsScene, type CameraFramePass } from './engine';
 import {
@@ -178,11 +178,19 @@ const presentGLSL = /* glsl */ `
 
 // The image as it goes to the canvas, finished like a camera's: first the
 // lens (chromatic aberration, vignette), then the film (colour or black and
-// white, grain), then the passepartout over the overscan.
+// white, its frame edge, grain), then the passepartout over the overscan.
 //
-// The frame is the sensor's aspect fitted into the canvas (`still_frame`, in
+// The frame is the sensor's aspect fitted into the canvas (`still_rect`, in
 // pixels); everything is measured from it, the overscan around it is the
 // same lens going on.
+//
+// Frame style: a film edge around the image, as a scan of the negative or
+// slide with its rebate. The gate edge is rough (a filed-out carrier), its
+// corners slightly round, a little light bleeds over it; around it the film
+// base (black on a scan of a negative or a slide), on 35 mm the
+// perforations with the scanner's light through them, and generic edge
+// print: a frame number, an arrow, code bars. Never a brand name. The edge
+// pattern is fixed, so it does not flicker.
 //
 // Lateral chromatic aberration: the lens images each wavelength at a
 // slightly different scale, so colours separate towards the edges. The image
@@ -226,6 +234,51 @@ const finishGLSL = /* glsl */ `
     uniform vec3 film_balance;    // white balance
     uniform vec3 film_shadow;     // tint of the shadows
     uniform vec3 film_highlight;  // tint of the highlights
+    uniform vec4 frame_style;     // style (0 plain, 1 120, 2 35 mm), film edge x, y (pixels), roughness (pixels)
+    uniform vec3 frame_base;      // film base colour
+    uniform vec3 frame_mark;      // edge print colour
+
+    float hash1(float n) { return fract(sin(n * 127.1) * 43758.5453); }
+    float noise1(float x) {
+        float i = floor(x);
+        float f = fract(x);
+        return mix(hash1(i), hash1(i + 1.0), f * f * (3.0 - 2.0 * f));
+    }
+    // signed distance to a rounded rectangle around the origin (inside < 0)
+    float roundRect(vec2 p, vec2 halfSize, float r) {
+        vec2 q = abs(p) - halfSize + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    }
+    float box(vec2 p, vec2 lo, vec2 hi, float soft) {
+        vec2 a = smoothstep(lo - soft, lo + soft, p) * (1.0 - smoothstep(hi - soft, hi + soft, p));
+        return a.x * a.y;
+    }
+    // one seven-segment digit in a 1 x 2 cell (p in cell units)
+    float digit(vec2 p, int n, float soft) {
+        int bits[10] = int[10](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F);
+        int b = bits[n];
+        float t = 0.16;
+        float m = 0.0;
+        if ((b & 1) != 0) m = max(m, box(p, vec2(0.1, 2.0 - t), vec2(0.9, 2.0), soft));
+        if ((b & 2) != 0) m = max(m, box(p, vec2(1.0 - t, 1.0), vec2(1.0, 1.9), soft));
+        if ((b & 4) != 0) m = max(m, box(p, vec2(1.0 - t, 0.1), vec2(1.0, 1.0), soft));
+        if ((b & 8) != 0) m = max(m, box(p, vec2(0.1, 0.0), vec2(0.9, t), soft));
+        if ((b & 16) != 0) m = max(m, box(p, vec2(0.0, 0.1), vec2(t, 1.0), soft));
+        if ((b & 32) != 0) m = max(m, box(p, vec2(0.0, 1.0), vec2(t, 1.9), soft));
+        if ((b & 64) != 0) m = max(m, box(p, vec2(0.1, 1.0 - t * 0.5), vec2(0.9, 1.0 + t * 0.5), soft));
+        return m;
+    }
+    // edge print at o (pixels, bottom left), u pixels per cell unit:
+    // two digits, then an arrow
+    float edgePrint(vec2 p, vec2 o, float u, int d1, int d2) {
+        vec2 q = (p - o) / u;
+        float soft = 0.6 / u;
+        float m = digit(q, d1, soft);
+        m = max(m, digit(q - vec2(1.4, 0.0), d2, soft));
+        vec2 a = q - vec2(3.0, 1.0);
+        m = max(m, (1.0 - smoothstep(-soft, soft, max(abs(a.y) * 1.6 + a.x - 1.0, -a.x))));
+        return m;
+    }
 
     highp uvec3 pcg3d(highp uvec3 v) {
         v = v * 1664525u + 1013904223u;
@@ -305,6 +358,56 @@ const finishGLSL = /* glsl */ `
             c = pow(lin, vec3(1.0 / 2.2));
         }
 
+        // the film: its frame edge (frame style)
+        vec2 fp = gl_FragCoord.xy;
+        float inFilm = 1.0;
+        vec3 over = c;                               // the image, and the overscan around it
+        if (frame_style.x > 0.5) {
+            vec2 pc = fp - frameCentre;
+            float H = frameHalf.y * 2.0;
+            // the gate: rough along each edge, corners slightly round
+            bool side = abs(pc.x) / frameHalf.x > abs(pc.y) / frameHalf.y;
+            float along = side ? pc.y + sign(pc.x) * 1000.0 : pc.x + sign(pc.y) * 3000.0;
+            float rough = (noise1(along / 6.0) - 0.5) * 0.8 + (noise1(along / 41.0) - 0.5) * 1.6;
+            float dGate = roundRect(pc, frameHalf, 0.006 * H) + rough * frame_style.w;
+            float inGate = 1.0 - smoothstep(-0.8, 0.8, dGate);
+            // the film around it
+            vec2 outline = frameHalf + frame_style.yz;
+            float dFilm = roundRect(pc, outline, 0.004 * H);
+            inFilm = 1.0 - smoothstep(-0.8, 0.8, dFilm);
+            // film base, with a little light bled over the gate
+            vec3 edge = frame_base + c * 0.3 * exp(-max(dGate, 0.0) / (0.004 * H));
+            float mm = H / 24.0;                     // a millimetre of a 24 mm high frame, in pixels
+            if (frame_style.x > 1.5) {
+                // 35 mm: perforations (4.75 mm pitch, 2.8 x 2 mm, 2.5 mm out
+                // from the image edge), the scanner's light through them
+                float pitch = 4.75 * mm;
+                vec2 h = vec2(mod(pc.x + pitch * 0.5, pitch) - pitch * 0.5, abs(pc.y) - frameHalf.y - 2.5 * mm);
+                float hole = 1.0 - smoothstep(-0.8, 0.8, roundRect(h, vec2(1.4, 1.0) * mm, 0.5 * mm));
+                edge = mix(edge, vec3(1.0, 0.96, 0.88), hole);
+                // edge print in the strip outside the perforations
+                vec2 top = vec2(-frameHalf.x * 0.55, frameHalf.y + 4.0 * mm);
+                vec2 bottom = vec2(-frameHalf.x * 0.1, -frameHalf.y - 5.0 * mm);
+                float print = edgePrint(pc, top, 0.42 * mm, 2, 4);
+                print = max(print, edgePrint(pc, bottom, 0.42 * mm, 2, 5));
+                // code bars along the bottom
+                float bx = (pc.x + frameHalf.x * 0.5) / (0.45 * mm);
+                if (bx > 0.0 && bx < 40.0 && hash1(floor(bx)) > 0.45) {
+                    print = max(print, box(vec2(fract(bx), pc.y), vec2(0.15, -frameHalf.y - 5.0 * mm), vec2(0.85, -frameHalf.y - 4.0 * mm), 0.3));
+                }
+                edge = mix(edge, frame_mark, print * 0.85 * inFilm);
+            } else {
+                // 120: frame number and arrow in the band above, a mark at the side
+                vec2 top = vec2(-frameHalf.x * 0.7, frameHalf.y + frame_style.z * 0.3);
+                float print = edgePrint(pc, top, frame_style.z * 0.2, 0, 7);
+                vec2 sm = vec2(pc.x - frameHalf.x - frame_style.y * 0.5, pc.y - frameHalf.y * 0.6);
+                print = max(print, box(sm, -vec2(0.12, 0.9) * frame_style.yz, vec2(0.12, 0.9) * frame_style.yz, 0.8));
+                edge = mix(edge, frame_mark, print * 0.8 * inFilm);
+            }
+            // the film edge only on the film; beyond it the overscan
+            c = mix(over, mix(edge, over, inGate), inFilm);
+        }
+
         // the film: grain
         float amount = still_finish.y;
         if (amount > 0.0) {
@@ -332,9 +435,10 @@ const finishGLSL = /* glsl */ `
             c += g * amount * 0.12 * sqrt(4.0 * l * (1.0 - l));
         }
 
-        // the passepartout over the overscan
-        vec2 fp = gl_FragCoord.xy;
-        if (any(lessThan(fp, still_rect.xy)) || any(greaterThan(fp, still_rect.zw))) c *= 1.0 - still_vignette2.z;
+        // the passepartout over the overscan: outside the image, or with a
+        // film edge outside the film
+        if (frame_style.x > 0.5) c = mix(over * (1.0 - still_vignette2.z), c, inFilm);
+        else if (any(lessThan(fp, still_rect.xy)) || any(greaterThan(fp, still_rect.zw))) c *= 1.0 - still_vignette2.z;
 
         gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
     }
@@ -354,9 +458,20 @@ export type Finish = {
     vignette: FinishVignette;
     sensor: [number, number];    // mm; gives the frame its aspect and the vignette its geometry
     focalLength: number;         // mm
-    passepartout: number;        // 0 the overscan shows, 1 black
+    viewport: Viewport;          // passepartout (0 the overscan shows, 1 black), frame style and tint
     diffusion: number;           // diffusion filter, 0–1 (its glow is the engine's bloom)
 };
+
+// The film edge per kind of film, as a scan shows it: a negative's base
+// inverts to black and its pre-exposed edge print to light (warm on colour
+// negative, as the orange mask never inverts quite neutral); a slide's
+// unexposed edge is black with a neat edge from its mount. `rough`: how
+// ragged the gate edge is, in pixels at a 600 pixel high frame.
+const FRAME_LOOKS = {
+    colorNeg: { base: [0.018, 0.014, 0.012], mark: [1, 0.72, 0.28], rough: 2.2 },
+    bw: { base: [0.02, 0.02, 0.02], mark: [0.8, 0.8, 0.78], rough: 2.2 },
+    slide: { base: [0.006, 0.006, 0.008], mark: [0.62, 0.66, 0.7], rough: 0.6 }
+} as const;
 
 // veiling light of a diffusion filter at full strength, as linear light
 // added everywhere (0.004 lifts black to about 8 % grey)
@@ -679,7 +794,18 @@ export class StillFrames {
         const filmOn = profile.kind !== 'digital';
         const bw = profile.kind === 'bw';
         const [sensorW, sensorH] = finish.sensor;
-        const r = frameRect(source.width, source.height, sensorW / sensorH);
+        const vp = finish.viewport;
+        const shape = frameShape({ sensorWidth: sensorW, sensorHeight: sensorH }, vp.frameStyle);
+        const r = frameRect(source.width, source.height, shape);
+        const tint: Exclude<FrameTint, 'auto'> = vp.frameTint !== 'auto' ? vp.frameTint
+            : bw ? 'bw' : profile.slide ? 'slide' : 'colorNeg';
+        const look = FRAME_LOOKS[tint];
+        scope.resolve('frame_style').setValue([
+            vp.frameStyle === 'plain' ? 0 : vp.frameStyle === '120' ? 1 : 2,
+            r.w * shape.margin[0], r.h * shape.margin[1], look.rough * r.h / 600
+        ]);
+        scope.resolve('frame_base').setValue(look.base);
+        scope.resolve('frame_mark').setValue(look.mark);
         const v = finish.vignette;
         scope.resolve('still_image').setValue(source.colorBuffer);
         scope.resolve('still_finish').setValue([
@@ -703,7 +829,7 @@ export class StillFrames {
                 : v.mode === 'physical' ? [2, v.amount, 0, 0] : [0, 0, 0, 0]
         );
         scope.resolve('still_vignette2').setValue([
-            v.mode === 'hand' ? v.roundness : 0, v.mode === 'physical' ? opticalStops(v.fStop) : 0, finish.passepartout, 0
+            v.mode === 'hand' ? v.roundness : 0, v.mode === 'physical' ? opticalStops(v.fStop) : 0, vp.passepartout, 0
         ]);
         this.device.setBlendState(BlendState.NOBLEND);
         drawQuadWithShader(this.device, null, this.finishShader);

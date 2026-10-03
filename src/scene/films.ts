@@ -40,6 +40,7 @@ export type FilmProfile = {
     shadowTint: [number, number, number];
     highlightTint: [number, number, number];
     grain?: { intensity: number; size: number; color: number };   // typical grain; set on choosing the film
+    slide?: boolean;             // reversal (slide) film rather than a negative: its frame edge looks different
 };
 
 const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1] as FilmProfile['matrix'];
@@ -77,7 +78,7 @@ export const FILMS = {
         grain: { intensity: 0.35, size: 1.1, color: 0.45 }
     },
     velvia50: {
-        label: 'Velvia 50 (slide)', kind: 'color', ...neutral,
+        label: 'Velvia 50 (slide)', kind: 'color', slide: true, ...neutral,
         matrix: [1.05, -0.03, -0.02, -0.05, 1.08, -0.03, -0.04, -0.06, 1.1],
         contrast: 1.25, latShadow: 1.1, latHighlight: 0.85, black: 0, white: 1, exposure: -0.2, saturation: 1.25,
         shadowTint: [0.97, 0.98, 1.05], highlightTint: [1, 1, 0.98],

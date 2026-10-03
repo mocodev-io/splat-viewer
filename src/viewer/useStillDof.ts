@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3, type AppBase, type Texture } from 'playcanvas';
 import { useAppEvent } from '@playcanvas/react/hooks';
 import type { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import { frameRect, sensorAspect, type Lens } from '../scene/experience';
+import { frameRect, type FrameShape, type Lens } from '../scene/experience';
 import { StillFrames, type Finish } from './stillFrames';
 import { Aperture, APERTURE_GROUP } from './aperture';
 import { cameraFramePass, depthIsReciprocal, engineProblems, stillHooksOk } from './engine';
@@ -25,6 +25,7 @@ type StillDofOptions = {
     sceneKey: string;                    // changes whenever what is shown changes
     progress: RefObject<string>;         // short status for the HUD
     finish: Finish;                      // aberration and grain on the way to the canvas
+    shape: FrameShape;                   // where the image lies in the canvas
 };
 
 // The camera counts as standing still when the image moves less than this
@@ -73,7 +74,7 @@ const pose = (): Pose => ({ p: new Vec3(), r: new Quat() });
 // Returns the state: the mode, `overblur`, the gather radius scale for this
 // frame (1 while moving), and `range`, the depth range for the normalized
 // depth view.
-export function useStillDof({ app, controls, frame, lens, focus, accumulate, depthRange, busy, sceneKey, progress, finish }: StillDofOptions) {
+export function useStillDof({ app, controls, frame, lens, focus, accumulate, depthRange, busy, sceneKey, progress, finish, shape }: StillDofOptions) {
     const still = useRef<StillFrames | null>(null);
     const state = useRef({
         other: '',                                   // everything but the camera pose that changes the image
@@ -88,8 +89,8 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         jitter: null as null | { x: number; y: number; focus: number },
         aperture: null as Aperture | null
     });
-    const live = useRef({ lens, focus, accumulate, depthRange, busy, sceneKey, finish });
-    live.current = { lens, focus, accumulate, depthRange, busy, sceneKey, finish };
+    const live = useRef({ lens, focus, accumulate, depthRange, busy, sceneKey, finish, shape });
+    live.current = { lens, focus, accumulate, depthRange, busy, sceneKey, finish, shape };
 
     useEffect(() => {
         const cc = controls.current;
@@ -121,7 +122,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         camera.calculateProjection = (m: Mat4) => {
             const w = sf.frame.width;
             const h = Math.max(sf.frame.height, 1);
-            const frameW = frameRect(w, h, sensorAspect(live.current.lens)).w;
+            const frameW = frameRect(w, h, live.current.shape).w;
             const fov = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * w / frameW) * 180 / Math.PI;
             m.setPerspective(fov, w / h, camera.nearClip, camera.farClip, true);
             const j = state.current.jitter;
@@ -161,7 +162,7 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         // How far the image moves between two poses, in pixels: the turn
         // through the focal length in pixels, and the shift as seen at half
         // the focus distance (nearer things move more, far less).
-        const focalPx = frameRect(width, height, sensorAspect(lens)).w / (2 * Math.tan(camera.fov * Math.PI / 360));
+        const focalPx = frameRect(width, height, live.current.shape).w / (2 * Math.tan(camera.fov * Math.PI / 360));
         const reach = Math.max(focus.current / lens.metersPerUnit * 0.5, camera.nearClip);
         const current: Pose = { p: cc.entity.getPosition(), r: cc.entity.getRotation() };
         const movedPx = (a: Pose, b: Pose) => {

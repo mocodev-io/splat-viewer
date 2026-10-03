@@ -188,18 +188,42 @@ export const defaultLens = (): Lens => ({
 const toDeg = (r: number) => r * 180 / Math.PI;
 const toRad = (d: number) => d * Math.PI / 180;
 
+export const sensorAspect = (l: Pick<Lens, 'sensorWidth' | 'sensorHeight'>) => l.sensorWidth / l.sensorHeight;
+
 /**
- * The image frame: the sensor's aspect, as large as fits in a canvas of
- * width × height and centred in it. What lies outside is overscan, shown
+ * The shape of the frame: the sensor's aspect, and with a film frame style
+ * the film's edge around the image, as a fraction of the image's own width
+ * and height on each side.
+ */
+export type FrameShape = { aspect: number; margin: [number, number] };
+
+// The film edge around the image (fractions of the image size, per side):
+// 120 roll film a few millimetres of rebate all round; 35 mm the bands with
+// the perforations above and below a 36 x 24 frame (5.5 mm of 35 mm film on
+// each side, 23 % of the image height) and a narrow gap to the next frames.
+const FRAME_MARGINS: Record<FrameStyle, [number, number]> = {
+    plain: [0, 0],
+    '120': [0.04, 0.06],
+    '35mm': [0.035, 0.23]
+};
+
+export const frameShape = (l: Pick<Lens, 'sensorWidth' | 'sensorHeight'>, style: FrameStyle): FrameShape =>
+    ({ aspect: sensorAspect(l), margin: FRAME_MARGINS[style] });
+
+/**
+ * The image in a canvas of width × height: as large as fits with its film
+ * edge (if any) around it, centred. What lies outside is overscan, shown
  * dimmed or black by the passepartout.
  */
-export function frameRect(width: number, height: number, aspect: number) {
-    const w = Math.min(width, height * aspect);
-    const h = w / aspect;
+export function frameRect(width: number, height: number, shape: FrameShape) {
+    const [mx, my] = shape.margin;
+    // the whole outline (image and edge) is fitted, then the edge taken off
+    const outlineAspect = shape.aspect * (1 + 2 * mx) / (1 + 2 * my);
+    const ow = Math.min(width, height * outlineAspect);
+    const w = ow / (1 + 2 * mx);
+    const h = w / shape.aspect;
     return { x: (width - w) / 2, y: (height - h) / 2, w, h };
 }
-
-export const sensorAspect = (l: Pick<Lens, 'sensorWidth' | 'sensorHeight'>) => l.sensorWidth / l.sensorHeight;
 
 /** Horizontal angle of view of the frame, degrees. */
 export const horizontalFov = (l: Lens) => toDeg(2 * Math.atan(l.sensorWidth / (2 * l.focalLength)));
@@ -299,15 +323,26 @@ export function sceneLensVignette(s: ExperienceSettings): LensVignette {
 // ---- our extras: the viewport
 //
 // Outside the frame the view goes on with the same lens (overscan); the
-// passepartout dims it, 1 is black bars. Stored as `extras.viewport`.
+// passepartout dims it, 1 is black bars. The frame style draws a film edge
+// around the image, as a scan of the negative or slide with its rebate:
+// 120 roll film, or 35 mm with its perforations. Its tint follows the film
+// (auto) or is set: colour negative, black and white, slide. Stored as
+// `extras.viewport`.
 
-export type Viewport = { passepartout: number };
+export const FRAME_STYLES = ['plain', '120', '35mm'] as const;
+export type FrameStyle = typeof FRAME_STYLES[number];
+export const FRAME_TINTS = ['auto', 'colorNeg', 'bw', 'slide'] as const;
+export type FrameTint = typeof FRAME_TINTS[number];
 
-export const defaultViewport = (): Viewport => ({ passepartout: 1 });
+export type Viewport = { passepartout: number; frameStyle: FrameStyle; frameTint: FrameTint };
+
+export const defaultViewport = (): Viewport => ({ passepartout: 1, frameStyle: 'plain', frameTint: 'auto' });
 
 export function sceneViewport(s: ExperienceSettings): Viewport {
     const v = mergeKnown(defaultViewport(), s.extras?.viewport);
     v.passepartout = clamp(v.passepartout, { min: 0, max: 1 });
+    if (!FRAME_STYLES.includes(v.frameStyle)) v.frameStyle = 'plain';
+    if (!FRAME_TINTS.includes(v.frameTint)) v.frameTint = 'auto';
     return v;
 }
 

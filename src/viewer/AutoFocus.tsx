@@ -1,14 +1,14 @@
 import { useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppEvent } from '@playcanvas/react/hooks';
-import { frameRect, lensRanges } from '../scene/experience';
+import { frameRect, lensRanges, type FrameShape } from '../scene/experience';
 import type { CameraApi } from './ViewerCamera';
 
 type AutoFocusProps = {
     active: boolean;
     showFrame: boolean;                  // draw the AF point (focusing goes on without it)
     point: { x: number; y: number };     // AF point, 0..1 over the window; kept inside the frame
-    frameAspect: number;                 // the frame's aspect (the sensor's)
+    frameShape: FrameShape;              // where the image lies in the window
     transition: number;                  // s to (nearly) reach a new distance
     metersPerUnit: number;
     trigger: string;                     // a change forces a new measurement (another splat, say)
@@ -20,7 +20,7 @@ type AutoFocusProps = {
 // under the AF point only when something changed (camera, AF point, scene),
 // at most four times a second, and moves the focus towards each measurement
 // over `transition` seconds, like a lens motor.
-export function AutoFocus({ active, showFrame, point, frameAspect, transition, metersPerUnit, trigger, api, focus }: AutoFocusProps) {
+export function AutoFocus({ active, showFrame, point, frameShape, transition, metersPerUnit, trigger, api, focus }: AutoFocusProps) {
     const target = useRef<number | null>(null);
     const last = useRef({ key: '', time: -Infinity, busy: false });
     const label = useRef<HTMLSpanElement>(null);
@@ -28,7 +28,7 @@ export function AutoFocus({ active, showFrame, point, frameAspect, transition, m
 
     // the AF point in CSS pixels, inside the frame as a camera's AF points are
     const inFrame = () => {
-        const r = frameRect(window.innerWidth, window.innerHeight, frameAspect);
+        const r = frameRect(window.innerWidth, window.innerHeight, frameShape);
         const x = Math.min(Math.max(point.x * window.innerWidth, r.x), r.x + r.w);
         const y = Math.min(Math.max(point.y * window.innerHeight, r.y), r.y + r.h);
         return { x, y };

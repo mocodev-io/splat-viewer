@@ -18,7 +18,7 @@
 
 import type { AppBase, Texture } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
-import { frameRect, sensorAspect, type Lens } from '../scene/experience';
+import { frameRect, type FrameShape, type Lens } from '../scene/experience';
 import { depthIsReciprocal, setShaderChunks } from './engine';
 
 const composeDofGLSL = /* glsl */ `
@@ -314,7 +314,7 @@ const BLUR_VIEW_WHITE = 0.025;
  * radius limit and grain. `range` is the depth range texture for the
  * normalized depth view (stillFrames.ts), when it is ready.
  */
-export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, still: boolean,
+export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, shape: FrameShape, focus: number, blur: number, still: boolean,
     view: DepthView, range: { texture: Texture; ready: boolean }) {
     const dof = cf.dof;
     dof.highQuality = false;
@@ -328,7 +328,7 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: 
     const S = Math.max(focus, f * 1.01);                   // m, beyond the lens
     const cInf = (f * f) / (lens.fStop * (S - f));         // blur diameter at infinity on the sensor, m
     // the frame (the sensor's aspect) inside the canvas; outside it is overscan
-    const frame = frameRect(device.width, device.height, sensorAspect(lens));
+    const frame = frameRect(device.width, device.height, shape);
     const radiusPx = (cInf / 2) / (lens.sensorWidth / 1000) * frame.w;   // sensor width = frame width
 
     // the splat scene depth is stored as 1 / depth; a depth prepass stores it linear

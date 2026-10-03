@@ -6,7 +6,7 @@ import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import {
-    horizontalFov, ranges, type CameraPose, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    frameShape, horizontalFov, ranges, type CameraPose, type Viewport, type Grain, type Lens, type LensVignette, type PostEffectSettings,
     type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
@@ -61,7 +61,7 @@ type ViewerCameraProps = {
     grain: Grain;
     film: FilmSettings;
     lensVignette: LensVignette;
-    passepartout: number;
+    viewport: Viewport;
     background: Vec3Tuple;
     sceneKey: string;                     // changes whenever the scene content changes
     busy: boolean;                        // a splat is loading
@@ -71,8 +71,9 @@ type ViewerCameraProps = {
 // The camera: the engine's CameraControls for orbit / fly / pan, and the
 // engine's CameraFrame for post-processing, driven by the scene settings and
 // the lens.
-export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, film, lensVignette, passepartout, background, sceneKey, busy, progress }: ViewerCameraProps) {
+export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, film, lensVignette, viewport, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
+    const shape = frameShape(lens, viewport.frameStyle);
     // the film works on the image only; debug views show the engine's own output
     const filmOn = FILMS[film.id].kind !== 'digital' && debugView === 'image';
     const controls = useRef<CameraControls>(null);
@@ -190,7 +191,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         vignette: vignetteFor(postEffects, lensVignette, lens),
         sensor: [lens.sensorWidth, lens.sensorHeight],
         focalLength: lens.focalLength,
-        passepartout,
+        viewport,
         diffusion: postEffects.bloom.enabled ? postEffects.bloom.intensity / ranges.bloom.intensity.max : 0
     } satisfies Finish);
     const finish = useMemo(() => JSON.parse(finishKey) as Finish, [finishKey]);
@@ -222,7 +223,8 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         depthRange: depthView > 0,
         sceneKey: JSON.stringify([sceneKey, stillLens(lens), tonemapping, highPrecision, { ...postEffects, fringing: null, vignette: null, bloom: null },
             background, debugView, depthRange, farClip]),
-        finish
+        finish,
+        shape
     });
 
     // Focus and image size change between frames, so the lens is set per
@@ -236,7 +238,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         const s = still.current;
         const blur = lens.dof || debugView === 'blur amount' ? s.overblur : 0;
         if (!s.range) return;
-        updateLensDof(app, cf, lens, focus.current, blur, s.mode !== 'moving', depthView, s.range);
+        updateLensDof(app, cf, lens, shape, focus.current, blur, s.mode !== 'moving', depthView, s.range);
     });
 
     return (

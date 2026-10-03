@@ -71,6 +71,16 @@ distance, no separate field of view.
   gate with overscan). 1 shows black bars, lower dims the overscan less, 0
   shows it fully. Vignette, aberration and grain are measured from the
   frame, and the AF point stays inside it. Saved as `extras.viewport`.
+- **Frame style** (Camera → Framing): *Plain*, or a film edge around the
+  image as a scan of the negative or slide shows it: *120 film* (a few
+  millimetres of rebate all round) or *35 mm film* (the perforation bands
+  above and below, with the scanner's light through the holes). The gate
+  edge is rough, as from a filed-out carrier, with slightly round corners
+  and a little light bleeding over it; the edge print is generic (a frame
+  number, an arrow, code bars), never a brand name. The image shrinks so
+  the whole film fits in the window. **Frame tint**: *Auto* follows the
+  film (colour negative: black base with warm edge print; black and white:
+  grey print; slide, Velvia: black with a neat edge), or set it yourself.
 - **Focus**: *manual* or *auto*, as on a camera.
   - *Manual*: **Focus m** (0.1–50 m) is the focus ring.
   - *Auto* (continuous AF, with DoF on): the camera keeps focusing on what
@@ -259,7 +269,7 @@ and neutral black and white):
     "grain": { "enabled": true, "intensity": 0.25, "size": 1, "color": 0.3, "animation": 1 },
     "vignette": { "physical": false, "roundness": 1 }
   },
-  "viewport": { "passepartout": 1 }
+  "viewport": { "passepartout": 1, "frameStyle": "120", "frameTint": "auto" }
 }
 ```
 

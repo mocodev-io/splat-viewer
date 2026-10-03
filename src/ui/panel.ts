@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
     BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, defaultLensVignette, defaultViewport, FOCUS_MODES,
+    FRAME_STYLES, FRAME_TINTS, type FrameStyle, type FrameTint,
     grainRanges, lensRanges, ranges, sceneFilm, sceneGrain, sceneLensVignette, SENSOR_NAMES, SENSORS, TONEMAPPING,
     type ExperienceSettings, type Grain, type Lens, type LensVignette, type PostEffectSettings,
     type SensorName, type Tonemapping, type Vec3Tuple, type Viewport
@@ -68,6 +69,10 @@ export function useScenePanel({ splats, onLoad, onUnload, onResetView, onSave }:
 
 const filmOptions = Object.fromEntries(FILM_IDS.map(id => [FILMS[id].label, id]));
 const filterOptions = Object.fromEntries(BW_FILTER_IDS.map(id => [id === 'none' ? 'None' : id[0].toUpperCase() + id.slice(1), id]));
+const frameStyleOptions = Object.fromEntries(FRAME_STYLES.map(s => [s === 'plain' ? 'Plain' : s === '120' ? '120 film' : '35 mm film', s]));
+const frameTintOptions = Object.fromEntries(FRAME_TINTS.map(t => [
+    { auto: 'Auto (film)', colorNeg: 'Color negative', bw: 'Black & white', slide: 'Slide' }[t], t
+]));
 const bladeOptions = Object.fromEntries(BLADE_COUNTS.map(n => [n ? `${n} blades` : 'Round', n]));
 
 // Basic > Exposure, in stops; stored as SuperSplat's grading brightness (2^stops, at most 3)
@@ -106,6 +111,7 @@ type LensPanelProps = {
 export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelProps) {
     const r = lensRanges;
     const d = defaultLens();
+    const vp = defaultViewport();
     const custom = (get: Get) => get('Camera.sensor') === 'Custom';
     const auto = (get: Get) => get('Lens.Focus.focusMode') === 'auto';
     const dof = (get: Get) => get('Lens.Depth of field.dof') as boolean;
@@ -125,8 +131,15 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
             sensorHeight: { value: d.sensorHeight, ...r.sensorHeight, label: 'Height mm', render: custom },
             // the frame has the sensor's aspect; around it the same lens goes
             // on (overscan), dimmed by the passepartout, black at 1
+            // the frame style draws a film edge around the image, as a scan
+            // of the negative or slide with its rebate
             Framing: folder({
-                passepartout: { value: defaultViewport().passepartout, min: 0, max: 1, step: 0.01, label: 'Passepartout' }
+                passepartout: { value: vp.passepartout, min: 0, max: 1, step: 0.01, label: 'Passepartout' },
+                frameStyle: { value: vp.frameStyle as string, options: frameStyleOptions, label: 'Frame style' },
+                frameTint: {
+                    value: vp.frameTint as string, options: frameTintOptions, label: 'Frame tint',
+                    render: get => get('Camera.Framing.frameStyle') !== 'plain'
+                }
             })
         }, { order: ORDER.camera }),
         Lens: folder({
@@ -181,11 +194,13 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
         afFrame: v.afFrame
     };
 
-    const viewport: Viewport = { passepartout: v.passepartout };
+    const viewport: Viewport = {
+        passepartout: v.passepartout, frameStyle: v.frameStyle as FrameStyle, frameTint: v.frameTint as FrameTint
+    };
 
     // puts a loaded or computed lens into the panel
     const apply = (l: Partial<Lens>) => set(l);
-    const applyViewport = (vp: Viewport) => set({ passepartout: vp.passepartout });
+    const applyViewport = (vp: Viewport) => set({ passepartout: vp.passepartout, frameStyle: vp.frameStyle, frameTint: vp.frameTint });
 
     return { lens, apply, viewport, applyViewport };
 }
