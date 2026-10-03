@@ -131,6 +131,8 @@ export function App() {
     // the current ones through refs so they can stay stable
     const live = useRef({ look, lensPanel, experience, framing, measurePoints });
     live.current = { look, lensPanel, experience, framing, measurePoints };
+    // the splat panel is made further down (its buttons need the handlers)
+    const splatRef = useRef<ReturnType<typeof useSplatPanel> | null>(null);
 
     // Manual focus follows the slider. Switching from auto to manual keeps
     // the distance autofocus had reached, as a camera does.
@@ -155,6 +157,7 @@ export function App() {
         const result = await loadExperience(splatUrl(name));
         if (result.warning) console.warn(result.warning);
         live.current.look.apply(result.settings);
+        splatRef.current?.applyBackground(result.settings.background.color);
         const sceneLensSettings = sceneLens(result.settings);
         live.current.lensPanel.apply(sceneLensSettings);
         live.current.lensPanel.applyViewport(sceneViewport(result.settings));
@@ -195,7 +198,7 @@ export function App() {
             ...experience,
             tonemapping: look.tonemapping,
             highPrecisionRendering: look.highPrecision,
-            background: { color: look.background },
+            background: { color: splatRef.current?.background ?? experience.background.color },
             postEffectSettings: look.postEffects,
             cameras: [{ initial: pose }, ...experience.cameras.slice(1)],
             extras: {
@@ -204,7 +207,9 @@ export function App() {
                 look: {
                     ...lookExtras(experience),
                     grain: look.grain,
-                    film: look.film,
+                    film: look.film.id,
+                    filmFilter: look.film.filter,
+                    filmStrength: look.film.strength,
                     vignette: look.lensVignette
                 },
                 viewport
@@ -239,6 +244,7 @@ export function App() {
 
     // what the camera shows besides itself and the lens: a change restarts the
     // still DoF and wakes the renderer up
+    splatRef.current = splatPanel;
     const sceneKey = JSON.stringify([loaded, splatPanel.orientation, objects, lighting]);
     const stillProgress = useRef('');
 
@@ -274,7 +280,7 @@ export function App() {
                     film={look.film}
                     lensVignette={look.lensVignette}
                     passepartout={lensPanel.viewport.passepartout}
-                    background={look.background}
+                    background={splatPanel.background}
                     sceneKey={sceneKey}
                     busy={!!loaded && !framing}
                     progress={stillProgress}

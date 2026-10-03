@@ -6,13 +6,14 @@ import { useApp, useAppEvent } from '@playcanvas/react/hooks';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import {
-    horizontalFov, type CameraPose, type FilmType, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    horizontalFov, type CameraPose, type Grain, type Lens, type LensVignette, type PostEffectSettings,
     type Tonemapping, type Vec3Tuple
 } from '../scene/experience';
 import type { DebugView, DepthRange } from '../ui/panel';
-import { updateLensDof, type DepthView } from './lensDof';
+import { setLogEncode, updateLensDof, type DepthView } from './lensDof';
 import { useStillDof } from './useStillDof';
-import { orbitDistance } from './engine';
+import { orbitDistance, verifyShaderChunks } from './engine';
+import { FILMS, type FilmSettings } from '../scene/films';
 import type { Finish, FinishVignette } from './stillFrames';
 
 export type ViewRequest = { pose: CameraPose; id: number };
@@ -58,7 +59,7 @@ type ViewerCameraProps = {
     highPrecision: boolean;
     postEffects: PostEffectSettings;
     grain: Grain;
-    film: FilmType;
+    film: FilmSettings;
     lensVignette: LensVignette;
     passepartout: number;
     background: Vec3Tuple;
@@ -72,6 +73,8 @@ type ViewerCameraProps = {
 // the lens.
 export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange, api, tonemapping, highPrecision, postEffects, grain, film, lensVignette, passepartout, background, sceneKey, busy, progress }: ViewerCameraProps) {
     const app = useApp();
+    // the film works on the image only; debug views show the engine's own output
+    const filmOn = FILMS[film.id].kind !== 'digital' && debugView === 'image';
     const controls = useRef<CameraControls>(null);
     const frame = useRef<CameraFrame>(null);
 
@@ -148,7 +151,8 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         if (!cf) return;
         const pe = postEffects;
         cf.rendering.samples = 1;   // splat depth (and splats in general) want no MSAA
-        cf.rendering.toneMapping = tonemapping === 'none' ? 'linear' : tonemapping;
+        // a film stock does its own tone mapping (its curve, stillFrames.ts)
+        cf.rendering.toneMapping = tonemapping === 'none' || filmOn ? 'linear' : tonemapping;
         // the lens DoF needs the scene alpha (the coverage), which rg11b10 has not
         cf.rendering.renderFormat = highPrecision || lens.dof ? 'rgba16' : 'rg11b10';
         cf.rendering.sharpness = pe.sharpness.enabled ? pe.sharpness.amount : 0;
@@ -172,7 +176,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
         // (stillFrames.ts): the engine's comes after its DoF but takes red and
         // blue from the sharp scene, so blurred parts got sharp colour edges
         cf.fringing.enabled = false;
-    }, [tonemapping, highPrecision, postEffects, lens.dof]);
+    }, [tonemapping, highPrecision, postEffects, lens.dof, filmOn]);
 
     // Aberration, vignette, film and grain finish the image on its way to the canvas
     // (stillFrames.ts), after everything the still accumulates: a change
@@ -182,7 +186,7 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     const finishKey = JSON.stringify({
         fringing: fringingAmount(postEffects),
         grain,
-        film,
+        film: filmOn ? film : { ...film, id: 'none' },
         vignette: vignetteFor(postEffects, lensVignette, lens),
         sensor: [lens.sensorWidth, lens.sensorHeight],
         focalLength: lens.focalLength,
@@ -224,6 +228,8 @@ export function ViewerCamera({ view, lens, focus, farClip, debugView, depthRange
     // frame. On a still the gather works on the accumulated average, as the
     // shrinking over-blur (useStillDof.ts).
     useAppEvent('prerender', () => {
+        verifyShaderChunks(app);
+        setLogEncode(app, filmOn);
         const cf = frame.current;
         if (!cf || !cf.dof.enabled) return;
         const s = still.current;

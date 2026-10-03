@@ -19,7 +19,7 @@
 import type { AppBase, Texture } from 'playcanvas';
 import type { CameraFrame } from 'playcanvas/scripts/esm/camera-frame.mjs';
 import { frameRect, sensorAspect, type Lens } from '../scene/experience';
-import { depthIsReciprocal, setShaderChunks, verifyShaderChunks } from './engine';
+import { depthIsReciprocal, setShaderChunks } from './engine';
 
 const composeDofGLSL = /* glsl */ `
     #ifdef DOF
@@ -232,6 +232,14 @@ const composeDofGLSL = /* glsl */ `
 // (more detail close by). Pixels without depth (nothing there) come out
 // white and do not count.
 const composeMainEndGLSL = /* glsl */ `
+    // With a film stock (films.ts) the tone mapping is linear and the film's
+    // curve does its work later (stillFrames.ts): the scene-linear light is
+    // log encoded over 16 stops (2^-12 .. 2^4) to fit the 10-bit frame. The
+    // gamma the engine applies next is undone here, so the frame holds the
+    // log value itself.
+    if (look_logEncode > 0.5) {
+        result = pow(clamp((log2(max(result, vec3(1.0 / 4096.0))) + 12.0) / 16.0, 0.0, 1.0), vec3(2.2));
+    }
     #ifdef DOF
     #ifndef LENS_OFF
         if (lens_view > 0.5) {
@@ -264,9 +272,23 @@ const composeMainEndGLSL = /* glsl */ `
     #endif
 `;
 
+// declared at the top level of the compose shader, for composeMainEndPS
+const composeDeclarationsGLSL = /* glsl */ `
+    uniform float look_logEncode;
+`;
+
+/** Whether the compose pass hands over log-encoded scene-linear light (a film is on). */
+export function setLogEncode(app: AppBase, on: boolean) {
+    app.graphicsDevice.scope.resolve('look_logEncode').setValue(on ? 1 : 0);
+}
+
 /** Puts the lens DoF into the engine's compose shader. Call once, before DoF is first switched on. */
 export function installLensDof(app: AppBase) {
-    setShaderChunks(app, 'composePS', { composeDofPS: composeDofGLSL, composeMainEndPS: composeMainEndGLSL });
+    setShaderChunks(app, 'composePS', {
+        composeDofPS: composeDofGLSL,
+        composeDeclarationsPS: composeDeclarationsGLSL,
+        composeMainEndPS: composeMainEndGLSL
+    });
 }
 
 /** Normalized depth view: 0 off, 1 linear, 2 inverse. */
@@ -294,7 +316,6 @@ const BLUR_VIEW_WHITE = 0.025;
  */
 export function updateLensDof(app: AppBase, cf: CameraFrame, lens: Lens, focus: number, blur: number, still: boolean,
     view: DepthView, range: { texture: Texture; ready: boolean }) {
-    verifyShaderChunks(app);
     const dof = cf.dof;
     dof.highQuality = false;
     dof.nearBlur = false;

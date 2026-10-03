@@ -146,28 +146,43 @@ The lens is saved under `extras.lens`, with the still settings
 file; a file without a lens, from SuperSplat say, gets the focal length
 that matches its `fov`.
 
-### Lens and film: aberration, vignette, film type, grain
+### The look: profile, basic, detail, optics, effects
 
-These finish the image the way a camera does: first the lens, then the
-film. They work on the final image (after depth of field, bloom and tone
-mapping), the same while the camera moves, while a still builds up and once
-it is done, and are measured from the frame.
+The **Look** panel is laid out as Lightroom's Develop module. As there, an
+effect is off at amount 0; there are no separate on / off switches.
 
-- **Chromatic aberration** (Look): the lens images each colour at a
-  slightly different scale, so colours separate towards the edges. The
-  image is sampled at a few scales around the centre (red outermost, blue
+- **Profile**: the film stock (below), its **Filter** for black and white,
+  and **Amount** (0 the neutral curve of the same kind, 1 the full film).
+  **Tone mapping** shows only without a film: a film does its own.
+- **Basic**: **Exposure** (stops), **Contrast**, **Saturation**, **Tint**:
+  SuperSplat's grading, applied to the light before the film or the tone
+  mapping.
+- **Detail**: **Sharpening**, **High precision** (scene rendering format).
+- **Optics**, what the lens adds: **Chromatic aberration** and the
+  **Vignette** (below).
+- **Effects**: **Bloom** and its radius, and the film **Grain** (below).
+
+The background colour moved to the Splat panel; it belongs to the scene.
+
+Optics and film finish the image the way a camera does: first the lens,
+then the film. They are measured from the frame, and work the same while
+the camera moves, while a still builds up and once it is done.
+
+- **Chromatic aberration**: the lens images each colour at a slightly
+  different scale, so colours separate towards the edges. The image is
+  sampled at a few scales around the centre (red outermost, blue
   innermost), which gives a soft spectral smear rather than a hard red and
   blue edge, and blurred parts keep their colour edges blurred. It is
   stored as SuperSplat's `fringing` (same 0–100 intensity, the outer colours
   land where SuperSplat's fringing puts them in the corner), so the file
   stays compatible; the engine's own fringing is not used, as it took red
   and blue from the unblurred image.
-- **Vignette** (Look), light lost in the lens: the image is darkened in
-  linear light, so highlights stay bright instead of turning grey (the
-  engine's vignette, which mixes towards black after tone mapping and is
-  stretched to the window, is not used).
-  - By hand, as in Lightroom: **Amount**, **Midpoint** (where the falloff is
-    halfway, 1 is the frame corner), **Feather** (how wide it runs) and
+- **Vignette**, light lost in the lens: the image is darkened in linear
+  light, so highlights stay bright instead of turning grey (the engine's
+  vignette, which mixes towards black after tone mapping and is stretched
+  to the window, is not used).
+  - By hand, as in Lightroom: the amount, **Midpoint** (where the falloff
+    is halfway, 1 is the frame corner), **Feather** (how wide it runs) and
     **Roundness**: 1 a circle around the optical axis in sensor
     millimetres, as a real lens (on 3:2 the long sides darken more than top
     and bottom), 0 the frame's own shape.
@@ -176,37 +191,61 @@ it is done, and are measured from the frame.
     optical vignetting of a lens wide open (about 1.5 stops in the corner at
     f/1.4, gone by f/5.6). Measured in the corner: 24 mm f/1.4 −3.1 stops,
     24 mm f/8 −1.7, 85 mm f/1.4 −1.6, 85 mm f/8 −0.2. The plain cos⁴ law is
-    a simple lens; modern wide angles lose less stopped down, so an
-    **Amount** around 0.6 suits those (1 is the lens as computed).
+    a simple lens; modern wide angles lose less stopped down, so an amount
+    around 0.6 suits those (1 is the lens as computed).
   - Stored as SuperSplat's `vignette` (amount, inner and outer for midpoint
     and feather) plus `extras.look.vignette` (`physical`, `roundness`).
-- **Film → Type**: Color or Black & white. Black and white film records
-  brightness only (Rec. 709 weights in linear light), after the lens: its
-  chromatic aberration shows as a soft smear without colour, and its grain
-  has no colour. Grading stays a separate colour correction before it.
-  Saved as `extras.look.film` (`"color"` or `"bw"`).
-- **Film → Grain** (off by default): random grains, strongest in the
-  mid-tones as on film. **Intensity**, **Size** (pixels; even large grain
-  stays irregular, never blocky), **Color** (0 monochrome, 1 a separate
-  grain per colour channel, colour film only) and **Animation**: 1 is film speed, a new
-  pattern 24 times a second (faster reads as video noise), lower is slower,
-  0 a fixed pattern. The grain is never averaged into a still, and it keeps
-  moving once the still is done or the viewer idles: only the last drawing
-  step is repeated then, without rendering the scene (the HUD stays `idle`).
+- **Film** (Profile): with a stock chosen the camera does no tone mapping
+  and hands the film scene-linear light (log encoded over 16 stops in a
+  10-bit frame). The film's sensitivity per colour and its characteristic
+  curve turn it into the image: its toe (how shadows run off) and shoulder
+  (how far highlights hold before they burn out), white balance, tints in
+  shadows and highlights, saturation.
+  - Colour: Portra 400 (warm, soft contrast, long highlight latitude),
+    Ektar 100 (saturated, fine grain), Superia 400 (cooler, green-cyan
+    shadows), Velvia 50 (slide film: hard contrast, deep colour, little
+    latitude), Vision3 500T (balanced for tungsten light, so daylight turns
+    blue on it, as on the real film).
+  - Black and white: neutral, Tri-X 400, HP5 Plus, Pan F 50 and
+    orthochromatic (does not see red: dark skin and lips). **Filter**:
+    yellow darkens a blue sky a little, orange more, red nearly to black,
+    green lightens foliage. Chromatic aberration then shows as a soft smear
+    without colour, and the grain has none.
+  - The profiles approximate the published character of each stock
+    (datasheet curves and spectral sensitivity, and how they look in
+    practice); they are not measured lab profiles.
+  - Choosing a film in the panel sets the grain to that film's own; you can
+    change it after. A loaded file keeps its own grain.
+- **Grain** (Effects): random grains, strongest in the mid-tones as on
+  film. Amount, **Size** (pixels; even large grain stays irregular, never
+  blocky), **Color** (0 monochrome, 1 a separate grain per colour channel,
+  colour film only) and **Animation**: 1 is film speed, a new pattern 24
+  times a second (faster reads as video noise), lower is slower, 0 a fixed
+  pattern. The grain is never averaged into a still, and it keeps moving
+  once the still is done or the viewer idles: only the last drawing step
+  is repeated then, without rendering the scene (the HUD stays `idle`).
 
 Changing any of these, or the passepartout, shows on the next frame
-without starting a still over. Our additions under `extras`:
+without starting a still over. Our additions under `extras` (files from
+before the film stocks, with `"film": "color"` or `"bw"`, open as no film
+and neutral black and white):
 
 ```json
 "extras": {
   "look": {
-    "film": "color",
-    "grain": { "enabled": true, "intensity": 0.3, "size": 1, "color": 0.2, "animation": 1 },
+    "film": "portra400",
+    "filmFilter": "none",
+    "filmStrength": 1,
+    "grain": { "enabled": true, "intensity": 0.25, "size": 1, "color": 0.3, "animation": 1 },
     "vignette": { "physical": false, "roundness": 1 }
   },
   "viewport": { "passepartout": 1 }
 }
 ```
+
+Film ids: `none`, `portra400`, `ektar100`, `superia400`, `velvia50`,
+`vision3_500t`, `bwNeutral`, `trix400`, `hp5`, `panf50`, `ortho`; filters:
+`none`, `yellow`, `orange`, `red`, `green`.
 
 ### Objects in the scene
 
@@ -276,6 +315,7 @@ W A S D flies, middle / shift drag pans, the wheel zooms.
 src/
   App.tsx                  state: which splat, its settings, the view
   scene/experience.ts      Experience Settings v2: types, defaults, ranges, loader
+  scene/films.ts           film stock profiles (colour and black and white)
   scene/splats.ts          the /splats folder listing
   viewer/SplatSetup.tsx    scene-wide splat settings
   viewer/Splat.tsx         one loaded splat; unmounting frees it

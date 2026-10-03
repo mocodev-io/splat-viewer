@@ -1,11 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useControls, folder, button } from 'leva';
 import {
-    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, defaultLensVignette, defaultViewport, FILM_TYPES, FOCUS_MODES,
+    BLADE_COUNTS, BLUR_QUALITIES, defaultGrain, defaultLens, defaultLensVignette, defaultViewport, FOCUS_MODES,
     grainRanges, lensRanges, ranges, sceneFilm, sceneGrain, sceneLensVignette, SENSOR_NAMES, SENSORS, TONEMAPPING,
-    type ExperienceSettings, type FilmType, type Grain, type Lens, type LensVignette, type PostEffectSettings,
+    type ExperienceSettings, type Grain, type Lens, type LensVignette, type PostEffectSettings,
     type SensorName, type Tonemapping, type Vec3Tuple, type Viewport
 } from '../scene/experience';
+import {
+    BW_FILTER_IDS, defaultFilm, FILM_IDS, FILMS, type BwFilter, type FilmId, type FilmProfile, type FilmSettings
+} from '../scene/films';
 import { ORIENTATIONS, type Orientation } from '../viewer/Splat';
 
 // colours: scene settings store 0..1 rgb, the panel edits hex
@@ -29,6 +32,7 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
     const [values, set] = useControls('Splat', () => ({
         file: { value: splats[0] ?? '', options: splats, label: 'File' },
         orientation: { value: 'x180' as Orientation, options: [...ORIENTATIONS], label: 'Orientation' },
+        background: { value: '#000000', label: 'Background' },
         // read inside the handlers through `get`, so the buttons see the current choice
         Load: button(get => onLoad(get('Splat.file') as string)),
         Unload: button(() => onUnload()),
@@ -41,10 +45,19 @@ export function useSplatPanel({ splats, onLoad, onUnload, onResetView, onSave }:
         if (splats.length && !splats.includes(values.file as string)) set({ file: splats[0] });
     }, [splats, values.file, set]);
 
-    return { orientation: values.orientation as Orientation, set };
+    return {
+        orientation: values.orientation as Orientation,
+        background: fromHex(values.background as string),
+        // puts a loaded file's background into the panel
+        applyBackground: (c: Vec3Tuple) => set({ background: toHex(c) })
+    };
 }
 
-const filmOptions = Object.fromEntries(FILM_TYPES.map(t => [t === 'bw' ? 'Black & white' : 'Color', t]));
+const filmOptions = Object.fromEntries(FILM_IDS.map(id => [FILMS[id].label, id]));
+const filterOptions = Object.fromEntries(BW_FILTER_IDS.map(id => [id === 'none' ? 'None' : id[0].toUpperCase() + id.slice(1), id]));
+
+// Basic > Exposure, in stops; stored as SuperSplat's grading brightness (2^stops, at most 3)
+const EXPOSURE = { min: -3, max: 1.5, step: 0.05 };
 
 // The vignette falloff runs from `start` to `end`, 1 being the frame corner.
 // The panel shows it as Lightroom does, a midpoint and a feather (its
@@ -149,113 +162,128 @@ export function useLensPanel({ onAfCenter, onMeasure, onApplyScale }: LensPanelP
     return { lens, apply, viewport, applyViewport };
 }
 
-// Everything the scene settings file can hold about the look of the image.
+// The look of the image, laid out as Lightroom's Develop module: Profile
+// (the film stock, which replaces the tone mapping), Basic, Detail, Optics
+// (what the lens adds) and Effects. As in Lightroom there are no on / off
+// switches: an amount of 0 is off. SuperSplat's `enabled` flags are written
+// from that when saving.
 export function useLookPanel() {
     const pe = ranges;
     const g = defaultGrain();
     const lv = defaultLensVignette();
     const mid = toMidpoint(0.3, 0.75);
-    const byHand = (get: (path: string) => unknown) => !get('Look.Vignette.vignettePhysical');
+    const f = defaultFilm();
+    const filmKind = (get: (path: string) => unknown) => FILMS[get('Look.Profile.film') as FilmId]?.kind;
+    const byHand = (get: (path: string) => unknown) => !get('Look.Optics.vignettePhysical');
     const [v, set] = useControls('Look', () => ({
-        tonemapping: { value: 'linear' as Tonemapping, options: [...TONEMAPPING], label: 'Tone mapping' },
-        highPrecision: { value: false, label: 'High precision' },
-        background: { value: '#000000', label: 'Background' },
-        Sharpness: folder({
-            sharpness: { value: false, label: 'On' },
-            sharpnessAmount: { value: 0, ...pe.sharpness.amount, label: 'Amount' }
-        }, { collapsed: true }),
-        Bloom: folder({
-            bloom: { value: false, label: 'On' },
-            bloomIntensity: { value: 0.1, ...pe.bloom.intensity, label: 'Intensity' },
-            bloomBlur: { value: 2, ...pe.bloom.blurLevel, label: 'Blur level' }
-        }, { collapsed: true }),
-        Grading: folder({
-            grading: { value: false, label: 'On' },
-            brightness: { value: 1, ...pe.grading.brightness, label: 'Brightness' },
+        Profile: folder({
+            film: { value: f.id as string, options: filmOptions, label: 'Film' },
+            filmFilter: { value: f.filter as string, options: filterOptions, label: 'Filter', render: get => filmKind(get) === 'bw' },
+            filmStrength: { value: f.strength, min: 0, max: 1, step: 0.01, label: 'Amount', render: get => filmKind(get) !== 'digital' },
+            // without a film the engine's tone mapping turns the light into an image
+            tonemapping: {
+                value: 'linear' as Tonemapping, options: [...TONEMAPPING], label: 'Tone mapping',
+                render: get => filmKind(get) === 'digital'
+            }
+        }),
+        Basic: folder({
+            exposure: { value: 0, ...EXPOSURE, label: 'Exposure' },
             contrast: { value: 1, ...pe.grading.contrast, label: 'Contrast' },
             saturation: { value: 1, ...pe.grading.saturation, label: 'Saturation' },
             tint: { value: '#ffffff', label: 'Tint' }
+        }),
+        Detail: folder({
+            sharpness: { value: 0, ...pe.sharpness.amount, label: 'Sharpening' },
+            highPrecision: { value: false, label: 'High precision' }
         }, { collapsed: true }),
-        // light lost in the lens (stillFrames.ts): by hand, as in Lightroom,
-        // or physical, from the focal length and f-stop of the lens
-        Vignette: folder({
-            vignette: { value: false, label: 'On' },
+        // what the lens adds (stillFrames.ts): chromatic aberration, stored as
+        // SuperSplat's `fringing`, and the vignette as light lost, by hand or
+        // physical, from the focal length and f-stop of the lens
+        Optics: folder({
+            aberration: { value: 0, ...pe.fringing.intensity, label: 'Chromatic aberr.' },
+            vignette: { value: 0, ...pe.vignette.intensity, label: 'Vignette' },
             vignettePhysical: { value: lv.physical, label: 'Physical' },
-            vignetteIntensity: { value: 0.5, ...pe.vignette.intensity, label: 'Amount' },
             vignetteMidpoint: { value: mid.midpoint, min: 0, max: 1, step: 0.01, label: 'Midpoint', render: byHand },
             vignetteFeather: { value: mid.feather, min: 0, max: 1, step: 0.01, label: 'Feather', render: byHand },
             vignetteRoundness: { value: lv.roundness, min: 0, max: 1, step: 0.01, label: 'Roundness', render: byHand },
             // SuperSplat's curvature, not used here; kept so saving does not change it
             vignetteCurvature: { value: 1, ...pe.vignette.curvature, render: () => false }
         }, { collapsed: true }),
-        // stored as SuperSplat's `fringing`; drawn as lateral chromatic
-        // aberration on the final image (stillFrames.ts)
-        'Chromatic aberration': folder({
-            fringing: { value: false, label: 'On' },
-            fringingIntensity: { value: 0.5, ...pe.fringing.intensity, label: 'Intensity' }
-        }, { collapsed: true }),
-        // what the film records (colour, or brightness only) and its grain
-        Film: folder({
-            film: { value: 'color' as FilmType, options: filmOptions, label: 'Type' },
-            grain: { value: g.enabled, label: 'Grain' },
-            grainIntensity: { value: g.intensity, ...grainRanges.intensity, label: 'Intensity' },
-            grainSize: { value: g.size, ...grainRanges.size, label: 'Size' },
-            grainColor: { value: g.color, ...grainRanges.color, label: 'Color', render: get => get('Look.Film.film') !== 'bw' },
-            grainAnimation: { value: g.animation, ...grainRanges.animation, label: 'Animation' }
+        Effects: folder({
+            bloom: { value: 0, ...pe.bloom.intensity, label: 'Bloom' },
+            bloomRadius: { value: 2, ...pe.bloom.blurLevel, label: 'Bloom radius' },
+            grain: { value: 0, ...grainRanges.intensity, label: 'Grain' },
+            grainSize: { value: g.size, ...grainRanges.size, label: 'Grain size' },
+            grainColor: { value: g.color, ...grainRanges.color, label: 'Grain color', render: get => filmKind(get) !== 'bw' },
+            grainAnimation: { value: g.animation, ...grainRanges.animation, label: 'Grain animation' }
         }, { collapsed: true })
     }));
 
+    // Choosing a film in the panel sets the grain to that film's own; a film
+    // that comes with a loaded file keeps the file's grain.
+    const lastFilm = useRef(v.film);
+    const loadedFilm = useRef<string | null>(null);
+    useEffect(() => {
+        if (v.film === lastFilm.current) return;
+        lastFilm.current = v.film;
+        if (loadedFilm.current === v.film) {
+            loadedFilm.current = null;
+            return;
+        }
+        const grain = (FILMS[v.film as FilmId] as FilmProfile).grain;
+        if (grain) set({ grain: grain.intensity, grainSize: grain.size, grainColor: grain.color });
+    }, [v.film, set]);
+
+    const brightness = 2 ** v.exposure;
+    const tint = fromHex(v.tint);
+    const graded = v.exposure !== 0 || v.contrast !== 1 || v.saturation !== 1 || tint.some(c => c !== 1);
     const postEffects: PostEffectSettings = {
-        sharpness: { enabled: v.sharpness, amount: v.sharpnessAmount },
-        bloom: { enabled: v.bloom, intensity: v.bloomIntensity, blurLevel: v.bloomBlur },
-        grading: {
-            enabled: v.grading, brightness: v.brightness, contrast: v.contrast,
-            saturation: v.saturation, tint: fromHex(v.tint)
-        },
+        sharpness: { enabled: v.sharpness > 0, amount: v.sharpness },
+        bloom: { enabled: v.bloom > 0, intensity: v.bloom, blurLevel: v.bloomRadius },
+        grading: { enabled: graded, brightness, contrast: v.contrast, saturation: v.saturation, tint },
         vignette: {
-            enabled: v.vignette, intensity: v.vignetteIntensity, ...fromMidpoint(v.vignetteMidpoint, v.vignetteFeather),
+            enabled: v.vignette > 0, intensity: v.vignette, ...fromMidpoint(v.vignetteMidpoint, v.vignetteFeather),
             curvature: v.vignetteCurvature
         },
-        fringing: { enabled: v.fringing, intensity: v.fringingIntensity }
+        fringing: { enabled: v.aberration > 0, intensity: v.aberration }
     };
-    const film = v.film as FilmType;
+    const film: FilmSettings = { id: v.film as FilmId, filter: v.filmFilter as BwFilter, strength: v.filmStrength };
     const lensVignette: LensVignette = { physical: v.vignettePhysical, roundness: v.vignetteRoundness };
     const grain: Grain = {
-        enabled: v.grain, intensity: v.grainIntensity, size: v.grainSize, color: v.grainColor, animation: v.grainAnimation
+        enabled: v.grain > 0, intensity: v.grain, size: v.grainSize, color: v.grainColor, animation: v.grainAnimation
     };
 
-    // puts a loaded settings file into the panel
+    // puts a loaded settings file into the panel; an effect switched off in
+    // the file shows as amount 0
     const apply = (s: ExperienceSettings) => {
         const p = s.postEffectSettings;
         const gr = sceneGrain(s);
         const sv = sceneLensVignette(s);
+        const fm = sceneFilm(s);
         const m = toMidpoint(p.vignette.inner, p.vignette.outer);
+        const on = (enabled: boolean, value: number) => (enabled ? value : 0);
+        loadedFilm.current = fm.id;
         set({
+            film: fm.id,
+            filmFilter: fm.filter,
+            filmStrength: fm.strength,
             tonemapping: s.tonemapping,
+            exposure: p.grading.enabled ? Math.min(Math.max(Math.log2(Math.max(p.grading.brightness, 1e-3)), EXPOSURE.min), EXPOSURE.max) : 0,
+            contrast: p.grading.enabled ? p.grading.contrast : 1,
+            saturation: p.grading.enabled ? p.grading.saturation : 1,
+            tint: toHex(p.grading.enabled ? p.grading.tint : [1, 1, 1]),
+            sharpness: on(p.sharpness.enabled, p.sharpness.amount),
             highPrecision: s.highPrecisionRendering,
-            background: toHex(s.background.color),
-            sharpness: p.sharpness.enabled,
-            sharpnessAmount: p.sharpness.amount,
-            bloom: p.bloom.enabled,
-            bloomIntensity: p.bloom.intensity,
-            bloomBlur: p.bloom.blurLevel,
-            grading: p.grading.enabled,
-            brightness: p.grading.brightness,
-            contrast: p.grading.contrast,
-            saturation: p.grading.saturation,
-            tint: toHex(p.grading.tint),
-            vignette: p.vignette.enabled,
+            aberration: on(p.fringing.enabled, p.fringing.intensity),
+            vignette: on(p.vignette.enabled, p.vignette.intensity),
             vignettePhysical: sv.physical,
-            vignetteIntensity: p.vignette.intensity,
             vignetteMidpoint: m.midpoint,
             vignetteFeather: m.feather,
             vignetteRoundness: sv.roundness,
             vignetteCurvature: p.vignette.curvature,
-            fringing: p.fringing.enabled,
-            fringingIntensity: p.fringing.intensity,
-            film: sceneFilm(s),
-            grain: gr.enabled,
-            grainIntensity: gr.intensity,
+            bloom: on(p.bloom.enabled, p.bloom.intensity),
+            bloomRadius: p.bloom.blurLevel,
+            grain: on(gr.enabled, gr.intensity),
             grainSize: gr.size,
             grainColor: gr.color,
             grainAnimation: gr.animation
@@ -265,7 +293,6 @@ export function useLookPanel() {
     return {
         tonemapping: v.tonemapping as Tonemapping,
         highPrecision: v.highPrecision,
-        background: fromHex(v.background),
         postEffects,
         grain,
         film,

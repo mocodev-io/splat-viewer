@@ -58,11 +58,12 @@
 // stops rendering, only this last step is repeated (`refresh`).
 
 import { APERTURE_GROUP } from './aperture';
-import { frameRect, type FilmType, type Grain } from '../scene/experience';
+import { frameRect, type Grain } from '../scene/experience';
+import { resolveFilm, type FilmSettings } from '../scene/films';
 import { composeReadsScene, type CameraFramePass } from './engine';
 import {
     ADDRESS_CLAMP_TO_EDGE, BLENDEQUATION_ADD, BLENDMODE_ONE, BlendState, FILTER_LINEAR, FILTER_NEAREST,
-    FramePass, PIXELFORMAT_RG32F, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, PIXELFORMAT_RGBA8, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
+    FramePass, PIXELFORMAT_RG32F, PIXELFORMAT_RGB10A2, PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F, RenderTarget, SEMANTIC_POSITION, ShaderUtils, Texture,
     drawQuadWithShader, type AppBase, type GraphicsDevice, type Shader
 } from 'playcanvas';
 
@@ -199,8 +200,11 @@ const presentGLSL = /* glsl */ `
 // each point (wide lenses lose more), times the optical vignetting of a lens
 // wide open, which is gone a few stops down.
 //
-// Black and white film records brightness only (Rec. 709 weights, in linear
-// light); a film emulation would weigh the colours by its own sensitivity.
+// The film (films.ts): with a stock chosen, the camera does no tone mapping
+// and hands over scene-linear light (log encoded in the 10-bit frame, see
+// lensDof.ts); the film's sensitivity per colour and its characteristic
+// curve turn it into the image, toe and shoulder included. Without a film
+// the image arrives tone mapped as before.
 //
 // Film grain: random grains (a Gaussian dot each, at a random place in each
 // cell of a `size` pixel grid), so even large grains stay irregular instead
@@ -212,9 +216,15 @@ const finishGLSL = /* glsl */ `
     uniform vec4 still_finish;    // aberration scale at the edge, grain intensity, grain size (pixels), grain colour
     uniform float still_seed;
     uniform vec4 still_rect;      // the frame in pixels: x0, y0, x1, y1
-    uniform vec4 still_optics;    // sensor width, height, focal length (mm), black and white (1)
+    uniform vec4 still_optics;    // sensor width, height, focal length (mm), -
     uniform vec4 still_vignette;  // mode (0 off, 1 by hand, 2 physical), amount, start, end
     uniform vec4 still_vignette2; // roundness, optical vignetting at the corner (stops), passepartout, -
+    uniform vec4 still_film;      // film on (1), exposure (stops), black, white
+    uniform vec4 film_curve;      // contrast, shadow latitude, highlight latitude, saturation
+    uniform mat3 film_matrix;     // colour sensitivity (rows)
+    uniform vec3 film_balance;    // white balance
+    uniform vec3 film_shadow;     // tint of the shadows
+    uniform vec3 film_highlight;  // tint of the highlights
 
     highp uvec3 pcg3d(highp uvec3 v) {
         v = v * 1664525u + 1013904223u;
@@ -255,11 +265,13 @@ const finishGLSL = /* glsl */ `
         float rCircle = length(mm) / (0.5 * length(still_optics.xy));   // 1 in the corner
         float rFrame = length(q) * 0.70710678;                           // 1 in the corner, frame shaped
 
-        // the lens: vignette as light lost, and the film: brightness only for black and white
+        // the lens: vignette as light lost; then the film
         float mode = still_vignette.x;
-        bool bw = still_optics.w > 0.5;
-        if (mode > 0.5 || bw) {
-            vec3 lin = pow(max(c, vec3(0.0)), vec3(2.2));
+        bool film = still_film.x > 0.5;
+        if (mode > 0.5 || film) {
+            // film: the image arrives as scene-linear light, log encoded
+            // (lensDof.ts); without film, tone mapped and gamma encoded
+            vec3 lin = film ? exp2(c * 16.0 - 12.0) * step(vec3(1.0 / 1024.0), c) : pow(max(c, vec3(0.0)), vec3(2.2));
             if (mode > 1.5) {
                 float t = length(mm) / still_optics.z;           // tan of the angle to this point
                 float cos2 = 1.0 / (1.0 + t * t);
@@ -270,7 +282,22 @@ const finishGLSL = /* glsl */ `
                 float r = mix(rFrame, rCircle, still_vignette2.x);
                 lin *= 1.0 - still_vignette.y * smoothstep(still_vignette.z, still_vignette.w, r);
             }
-            if (bw) lin = vec3(dot(lin, vec3(0.2126, 0.7152, 0.0722)));
+            if (film) {
+                // how the film's layers see the colours (black and white: one
+                // sensitivity, filter included), then its characteristic curve
+                // in stops from middle grey
+                vec3 v = film_matrix * (lin * film_balance);
+                vec3 x = log2(max(v, vec3(1e-6)) / 0.18) + still_film.y;
+                vec3 xs = x / mix(vec3(film_curve.z), vec3(film_curve.y), step(x, vec3(0.0)));
+                float black = still_film.z;
+                float white = still_film.w;
+                float p = (0.18 - black) / (white - black);
+                vec3 o = black + (white - black) / (1.0 + exp(-(film_curve.x * xs + log(p / (1.0 - p)))));
+                float lo = dot(o, vec3(0.2126, 0.7152, 0.0722));
+                o *= mix(film_shadow, film_highlight, smoothstep(0.02, 0.5, lo));
+                o = max(mix(vec3(lo), o, film_curve.w), vec3(0.0));
+                lin = o;
+            }
             c = pow(lin, vec3(1.0 / 2.2));
         }
 
@@ -319,7 +346,7 @@ export type FinishVignette =
 export type Finish = {
     fringing: number;            // SuperSplat's fringing intensity, 0 off
     grain: Grain;
-    film: FilmType;
+    film: FilmSettings;              // off ('none') also while a debug view is shown
     vignette: FinishVignette;
     sensor: [number, number];    // mm; gives the frame its aspect and the vignette its geometry
     focalLength: number;         // mm
@@ -438,11 +465,13 @@ export class StillFrames {
 
     constructor(app: AppBase) {
         const device = this.device = app.graphicsDevice;
-        // linear filtering: the aberration samples between pixels
-        this.frame = target(device, 'StillFrame', PIXELFORMAT_RGBA8, true, FILTER_LINEAR);
+        // 10 bits per channel: with a film these hold scene-linear light,
+        // log encoded over 16 stops (64 steps a stop); linear filtering, as
+        // the aberration samples between pixels
+        this.frame = target(device, 'StillFrame', PIXELFORMAT_RGB10A2, true, FILTER_LINEAR);
         this.display = [
-            target(device, 'StillDisplayA', PIXELFORMAT_RGBA8, false, FILTER_LINEAR),
-            target(device, 'StillDisplayB', PIXELFORMAT_RGBA8, false, FILTER_LINEAR)
+            target(device, 'StillDisplayA', PIXELFORMAT_RGB10A2, false, FILTER_LINEAR),
+            target(device, 'StillDisplayB', PIXELFORMAT_RGB10A2, false, FILTER_LINEAR)
         ];
         this.sum = target(device, 'StillSum', PIXELFORMAT_RGBA16F, false);
         this.avg = target(device, 'StillAverage', PIXELFORMAT_RGBA16F, false, FILTER_LINEAR);
@@ -637,7 +666,9 @@ export class StillFrames {
         const g = finish.grain;
         this.shownSource = source;
         this.seed = grainSeed(g);
-        const bw = finish.film === 'bw';
+        const profile = resolveFilm(finish.film);
+        const filmOn = profile.kind !== 'digital';
+        const bw = profile.kind === 'bw';
         const [sensorW, sensorH] = finish.sensor;
         const r = frameRect(source.width, source.height, sensorW / sensorH);
         const v = finish.vignette;
@@ -649,7 +680,14 @@ export class StillFrames {
         // the canvas has the same size as the source; the frame is centred, so
         // it lies the same counted from the bottom (gl_FragCoord) as from the top
         scope.resolve('still_rect').setValue([Math.round(r.x), Math.round(r.y), Math.round(r.x + r.w), Math.round(r.y + r.h)]);
-        scope.resolve('still_optics').setValue([sensorW, sensorH, finish.focalLength, bw ? 1 : 0]);
+        scope.resolve('still_optics').setValue([sensorW, sensorH, finish.focalLength, 0]);
+        scope.resolve('still_film').setValue([filmOn ? 1 : 0, profile.exposure, profile.black, profile.white]);
+        scope.resolve('film_curve').setValue([profile.contrast, profile.latShadow, profile.latHighlight, profile.saturation]);
+        const m = profile.matrix;   // rows, to column-major
+        scope.resolve('film_matrix').setValue([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
+        scope.resolve('film_balance').setValue(profile.whiteBalance);
+        scope.resolve('film_shadow').setValue(profile.shadowTint);
+        scope.resolve('film_highlight').setValue(profile.highlightTint);
         scope.resolve('still_vignette').setValue(
             v.mode === 'hand' ? [1, v.amount, v.start, Math.max(v.end, v.start + 1e-3)]
                 : v.mode === 'physical' ? [2, v.amount, 0, 0] : [0, 0, 0, 0]

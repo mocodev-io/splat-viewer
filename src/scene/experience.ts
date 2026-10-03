@@ -1,3 +1,5 @@
+import { BW_FILTER_IDS, defaultFilm, FILM_IDS, type BwFilter, type FilmId, type FilmSettings } from './films';
+
 // Scene data: SuperSplat's Experience Settings v2, the JSON that SuperSplat
 // Studio writes and the SuperSplat viewer reads. Field names, defaults and
 // ranges follow playcanvas/supersplat-viewer (src/schemas/), so a settings
@@ -262,17 +264,20 @@ export function sceneGrain(s: ExperienceSettings): Grain {
 // ---- our extras: the film and the lens vignette
 //
 // The image goes through the lens (aberration, vignette) and then onto the
-// film: colour, or black and white, which records only brightness (a later
-// film emulation would hang its own sensitivity per colour here). Stored as
-// `extras.look.film`.
+// film (films.ts): a film stock, its filter for black and white, and how
+// strongly it applies. Stored as `extras.look.film` (the stock's id),
+// `filmFilter` and `filmStrength`; files from before the stocks hold
+// "color" or "bw" there, read as no film and neutral black and white.
 
-export const FILM_TYPES = ['color', 'bw'] as const;
-export type FilmType = typeof FILM_TYPES[number];
-
-export function sceneFilm(s: ExperienceSettings): FilmType {
+export function sceneFilm(s: ExperienceSettings): FilmSettings {
     const look = s.extras?.look;
-    const film = isObject(look) ? look.film : undefined;
-    return FILM_TYPES.includes(film as FilmType) ? film as FilmType : 'color';
+    const f = defaultFilm();
+    if (!isObject(look)) return f;
+    const id = look.film === 'color' ? 'none' : look.film === 'bw' ? 'bwNeutral' : look.film;
+    if (FILM_IDS.includes(id as FilmId)) f.id = id as FilmId;
+    if (BW_FILTER_IDS.includes(look.filmFilter as BwFilter)) f.filter = look.filmFilter as BwFilter;
+    if (typeof look.filmStrength === 'number') f.strength = clamp(look.filmStrength, { min: 0, max: 1 });
+    return f;
 }
 
 // The vignette: SuperSplat's `vignette` keeps the amount and where the
