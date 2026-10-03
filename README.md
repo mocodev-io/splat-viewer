@@ -390,7 +390,8 @@ Our additions live under `extras`, which SuperSplat ignores:
 **Debug** (collapsed in the panel): *View* shows the image, the scene depth
 the effects work with, or the blur each pixel gets (red behind the focus
 plane, green in front of it or spilled over from it, dark where it is
-sharp; white is a blur of 2.5 % of the image height). *Depth range* sets
+sharp; white is the largest blur, 8 % of the image height, on a square
+root scale so small blurs still show and nothing clips). *Depth range* sets
 how the depth view shows depth: *camera
 near/far* is the engine's view (linear from the near to the far clip, so a
 room only uses a small part of the grey scale); *scene linear* and *scene

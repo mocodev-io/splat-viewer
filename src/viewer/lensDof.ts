@@ -57,8 +57,6 @@ const PROBES = 16;
 // The largest blur radius, as a fraction of the frame height: as the
 // still's over-blur, so the moving view reaches the still's blur.
 const MAX_BLUR = 0.08;
-// white in the blur amount view, as a fraction of the image height
-const BLUR_VIEW_WHITE = 0.025;
 // Astigmatism at full strength: in the frame corner the radial focus moves
 // this far one way and the tangential focus as far the other, in units of
 // the focus ratio (the still uses the same, stillFrames.ts).
@@ -296,7 +294,7 @@ const composeDofGLSL = /* glsl */ `
         #else
         uniform highp sampler2D uSceneDepthMap;
         uniform float lens_view;     // normalized depth view: 0 off, 1 linear, 2 inverse
-        uniform vec4 lens_extra;     // -, blur amount view white (pixels), depth range ready, lens DoF on
+        uniform vec4 lens_extra;     // -, largest blur radius (pixels, white in the blur amount view), depth range ready, lens DoF on
         uniform highp sampler2D lens_rangeMap;   // depth range of the image (stillFrames.ts): nearest, farthest
         uniform sampler2D lens_dofMap;           // the half-size gather: blurred colour, nearer blur's cover
         ${commonGLSL('uSceneDepthMap', 'sceneTexture')}
@@ -315,10 +313,12 @@ const composeDofGLSL = /* glsl */ `
             dBlur = mix(base, b.rgb, a);
 
             // Debug view: red is this pixel's own blur behind the focus plane,
-            // green in front of it or the blurred foreground over it. Squared
-            // against the gamma the debug output gets, so brightness follows
-            // the blur size; white is a fixed radius (lens_extra.y).
-            float amount = own / lens_extra.y;
+            // green in front of it or the blurred foreground over it. White
+            // is the largest blur (lens_extra.y), so nothing clips; the
+            // square root keeps small blurs visible (the blur in front of the
+            // focus grows with 1 / distance, behind it stays under c∞).
+            // Raised to 2.2 against the gamma the debug output gets.
+            float amount = sqrt(clamp(own / lens_extra.y, 0.0, 1.0));
             vec2 v = c >= 0.0 ? vec2(amount, b.a) : vec2(0.0, max(amount, b.a));
             dCoc = pow(clamp(v, 0.0, 1.0), vec2(2.2));
             return dBlur;
@@ -533,7 +533,7 @@ export function updateLensDof(app: AppBase, cf: CameraFrame, pass: LensDofPass |
     scope.resolve('lens_field').setValue([lens.fieldCurvature, lens.tiltX, lens.tiltY, lens.astigmatism * ASTIGMATISM]);
     scope.resolve('lens_frameUv').setValue([frame.w / (2 * device.width), frame.h / (2 * device.height), w2 / (w2 + h2), h2 / (w2 + h2)]);
     scope.resolve('lens_view').setValue(view);
-    scope.resolve('lens_extra').setValue([0, BLUR_VIEW_WHITE * frame.h, range.ready ? 1 : 0, on ? 1 : 0]);
+    scope.resolve('lens_extra').setValue([0, MAX_BLUR * frame.h, range.ready ? 1 : 0, on ? 1 : 0]);
     scope.resolve('lens_rangeMap').setValue(range.texture);
     scope.resolve('dof_lens').setValue([lens.catsEye * CATS_EYE_SHIFT, fringing, still ? 1 : 0, 0]);
     if (pass) {
