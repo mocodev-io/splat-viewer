@@ -201,9 +201,17 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         const focalPx = frameRect(width, height, live.current.shape).w / (2 * Math.tan(camera.fov * Math.PI / 360));
         const reach = Math.max(focus.current / lens.metersPerUnit * 0.5, camera.nearClip);
         const current: Pose = { p: cc.entity.getPosition(), r: cc.entity.getRotation() };
+        // The turn between two rotations from their relative quaternion
+        // q = a⁻¹ b: 2 · atan2(|vector part|, |w|). (2 · acos of the dot
+        // product is the same angle, but near 1 acos blows float rounding of
+        // an unchanged rotation up into tenths of a pixel, enough to restart
+        // a still that nothing moved.)
         const movedPx = (a: Pose, b: Pose) => {
-            const d = Math.abs(a.r.x * b.r.x + a.r.y * b.r.y + a.r.z * b.r.z + a.r.w * b.r.w);
-            const turn = 2 * Math.acos(Math.min(d, 1));
+            const w = a.r.w * b.r.w + a.r.x * b.r.x + a.r.y * b.r.y + a.r.z * b.r.z;
+            const x = a.r.w * b.r.x - a.r.x * b.r.w - a.r.y * b.r.z + a.r.z * b.r.y;
+            const y = a.r.w * b.r.y + a.r.x * b.r.z - a.r.y * b.r.w - a.r.z * b.r.x;
+            const z = a.r.w * b.r.z - a.r.x * b.r.y + a.r.y * b.r.x - a.r.z * b.r.w;
+            const turn = 2 * Math.atan2(Math.hypot(x, y, z), Math.abs(w));
             return (turn + a.p.distance(b.p) / reach) * focalPx;
         };
         const step = movedPx(s.prev, current);
@@ -212,7 +220,9 @@ export function useStillDof({ app, controls, frame, lens, focus, accumulate, dep
         const drift = s.mode === 'moving' ? 0 : movedPx(s.anchor, current);
 
         const other = `${focus.current.toFixed(4)}|${width}x${height}|${sceneKey}`;
-        const moving = other !== s.other || busy || step > STEP_PX || drift > DRIFT_PX;
+        // The per-frame step tells when the camera comes to rest; once a
+        // still runs, only its drift from where it started counts.
+        const moving = other !== s.other || busy || (s.mode === 'moving' ? step > STEP_PX : drift > DRIFT_PX);
         if (moving || (!hooksOk && s.mode !== 'moving')) {
             s.other = other;
             s.changedAt = now;
